@@ -1,0 +1,192 @@
+name: 'Release ROS Robot'
+description: 'Automate ROS package releases with bloom-release, using a release-please/release-plz-style workflow'
+author: 'Esteve Fernandez'
+branding:
+  icon: 'package'
+  color: 'blue'
+
+inputs:
+  mode:
+    description: 'Action mode: prepare (create release PR) or release (run bloom-release)'
+    required: false
+    default: 'release'
+  oauth-token:
+    description: >
+      PAT for release mode. Falls back to the BLOOM_OAUTH_TOKEN environment variable.
+      Not used in prepare mode (which uses GITHUB_TOKEN).
+    required: false
+  github-user:
+    description: >
+      GitHub username that owns the rosdistro fork used by bloom-release.
+      Falls back to the BLOOM_GITHUB_USER environment variable.
+      Only used in release mode.
+    required: false
+  repository:
+    description: >
+      Repository name as registered in rosdistro (e.g., my_ros_package).
+      Required in release mode.
+    required: false
+  release-repository:
+    description: >
+      Release repository URL (e.g., https://github.com/ros2-gbp/my_package-release.git).
+      Required in release mode.
+    required: false
+  rosdistro:
+    description: >
+      ROS distribution to release (e.g., rolling, jazzy, humble).
+      Required in release mode.
+    required: false
+  track:
+    description: >
+      Bloom track to use (e.g., rolling, jazzy).
+      Required in release mode.
+    required: false
+  dry-run:
+    description: 'Run in dry-run mode without actually releasing'
+    required: false
+    default: 'false'
+  exclude-paths:
+    description: >
+      Newline-separated list of POSIX glob patterns to exclude from package.xml
+      discovery. Useful when the repository contains test fixtures or vendored
+      code with package.xml files that are not real ROS packages.
+    required: false
+    default: ''
+  version-bump:
+    description: 'Version bump type: auto (detect from conventional commits), patch, minor, or major'
+    required: false
+    default: 'auto'
+  base-branch:
+    description: 'Base branch for release PR (only used in prepare mode)'
+    required: false
+    default: 'main'
+
+outputs:
+  pr-created:
+    description: 'Whether a release PR was created (prepare mode only)'
+    value: ${{ steps.prepare-release.outputs.pr-created || 'false' }}
+  released:
+    description: 'Whether a release was performed (release mode only)'
+    value: ${{ steps.bloom-release.outputs.released || 'false' }}
+  version:
+    description: 'The version that was released or will be released'
+    value: ${{ steps.prepare-release.outputs.version || steps.bloom-release.outputs.version }}
+  rosdistro:
+    description: 'The ROS distribution that was released to (release mode only)'
+    value: ${{ steps.bloom-release.outputs.rosdistro }}
+  pr-url:
+    description: 'The URL of the release PR (prepare mode) or rosdistro pull request (release mode)'
+    value: ${{ steps.prepare-release.outputs.pr-url || steps.bloom-release.outputs.pr-url }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up mise and pixi
+      uses: jdx/mise-action@v4
+      with:
+        working_directory: ${{ github.action_path }}
+
+    - name: Install dependencies
+      shell: bash
+      run: pixi install --manifest-path "${{ github.action_path }}" --frozen
+
+    - name: Initialize rosdep
+      if: inputs.mode == 'release'
+      shell: bash
+      run: |
+        sudo rosdep init || true
+        rosdep update
+
+    - name: Configure Git
+      shell: bash
+      env:
+        INPUT_OAUTH_TOKEN: ${{ inputs.oauth-token }}
+      run: |
+        git config --global user.name "github-actions[bot]"
+        git config --global user.email "github-actions[bot]@users.noreply.github.com"
+        git config --global credential.helper store
+
+        if [ "${{ inputs.mode }}" = "prepare" ]; then
+          # prepare mode: authenticate with GITHUB_TOKEN only.
+          if [ -z "${GITHUB_TOKEN:-}" ]; then
+            echo "::error::prepare mode requires GITHUB_TOKEN." \
+                 "Add 'permissions: contents: write' to the job."
+            exit 1
+          fi
+          echo "https://x-access-token:${GITHUB_TOKEN}@github.com" > ~/.git-credentials
+        else
+          # release mode: authenticate with BLOOM_OAUTH_TOKEN (env-first, input fallback).
+          _TOKEN="${BLOOM_OAUTH_TOKEN:-${INPUT_OAUTH_TOKEN:-}}"
+          if [ -z "${_TOKEN}" ]; then
+            echo "::error::release mode requires BLOOM_OAUTH_TOKEN env var or oauth-token input."
+            exit 1
+          fi
+          echo "https://x-access-token:${_TOKEN}@github.com" > ~/.git-credentials
+        fi
+
+    - name: Configure Bloom
+      if: inputs.mode == 'release'
+      shell: bash
+      env:
+        INPUT_OAUTH_TOKEN: ${{ inputs.oauth-token }}
+        INPUT_GITHUB_USER: ${{ inputs.github-user }}
+      run: |
+        _TOKEN="${BLOOM_OAUTH_TOKEN:-${INPUT_OAUTH_TOKEN:-}}"
+        _USER="${BLOOM_GITHUB_USER:-${INPUT_GITHUB_USER:-}}"
+        if [ -z "${_USER}" ]; then
+          echo "::error::release mode requires BLOOM_GITHUB_USER env var or github-user input."
+          exit 1
+        fi
+        mkdir -p ~/.config
+        cat > ~/.config/bloom <<EOF
+        {
+          "github_user": "${_USER}",
+          "oauth_token": "${_TOKEN}"
+        }
+        EOF
+
+    - name: Validate release-mode inputs
+      if: inputs.mode == 'release'
+      shell: bash
+      run: |
+        _missing=""
+        [ -z "${{ inputs.repository }}" ]         && _missing="$_missing repository"
+        [ -z "${{ inputs.rosdistro }}" ]           && _missing="$_missing rosdistro"
+        [ -z "${{ inputs.track }}" ]               && _missing="$_missing track"
+        [ -z "${{ inputs.release-repository }}" ]  && _missing="$_missing release-repository"
+        if [ -n "$_missing" ]; then
+          echo "::error::release mode requires the following inputs:$_missing"
+          exit 1
+        fi
+
+    - name: Prepare Release PR
+      if: inputs.mode == 'prepare'
+      id: prepare-release
+      shell: bash
+      env:
+        BLOOM_EXCLUDE_PATHS: ${{ inputs.exclude-paths }}
+      run: |
+        export GH_TOKEN="${GITHUB_TOKEN}"
+        pixi run --manifest-path "${{ github.action_path }}" \
+          python "${{ github.action_path }}/scripts/prepare_release.py" \
+          --version-bump "${{ inputs.version-bump }}" \
+          --base-branch "${{ inputs.base-branch }}"
+
+    - name: Run Bloom Release
+      if: inputs.mode == 'release'
+      id: bloom-release
+      shell: bash
+      env:
+        INPUT_OAUTH_TOKEN: ${{ inputs.oauth-token }}
+        BLOOM_EXCLUDE_PATHS: ${{ inputs.exclude-paths }}
+      run: |
+        export GH_TOKEN="${BLOOM_OAUTH_TOKEN:-${INPUT_OAUTH_TOKEN:-}}"
+        ARGS="--repository ${{ inputs.repository }}"
+        ARGS="$ARGS --rosdistro ${{ inputs.rosdistro }}"
+        ARGS="$ARGS --track ${{ inputs.track }}"
+        ARGS="$ARGS --release-repository ${{ inputs.release-repository }}"
+        if [ "${{ inputs.dry-run }}" = "true" ]; then
+          ARGS="$ARGS --dry-run"
+        fi
+        pixi run --manifest-path "${{ github.action_path }}" \
+          python "${{ github.action_path }}/scripts/execute_release.py" $ARGS

@@ -1,0 +1,81 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+    branches:
+      - main
+      - master
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up mise and pixi
+        uses: jdx/mise-action@v4
+
+      - name: Install dependencies
+        run: pixi install --locked
+
+      - name: Run tests with coverage
+        run: pixi run --locked pytest --cov=scripts --cov-report=xml --cov-report=term-missing
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          file: ./coverage.xml
+          fail_ci_if_error: false
+
+  lint:
+    name: Lint and Format Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up mise and pixi
+        uses: jdx/mise-action@v4
+
+      - name: Install dependencies
+        run: pixi install --locked
+
+      - name: Check formatting with Black
+        run: pixi run --locked format-check
+
+      - name: Lint with Ruff
+        run: pixi run --locked lint
+
+      - name: Type check with mypy
+        run: pixi run --locked typecheck
+
+  validate:
+    name: Validate Files
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up mise and pixi
+        uses: jdx/mise-action@v4
+
+      - name: Install dependencies
+        run: pixi install --locked
+
+      - name: Validate YAML files
+        run: |
+          pixi run --locked python -c "import yaml; yaml.safe_load(open('action.yml'))"
+          pixi run --locked python -c "import yaml; yaml.safe_load(open('example-release-workflow.yaml'))"
+
+      - name: Compile Python files
+        run: |
+          pixi run --locked python -m py_compile \
+            scripts/common.py \
+            scripts/execute_release.py \
+            scripts/prepare_release.py

@@ -1,0 +1,8 @@
+[tools]
+pixi = "latest"
+
+[plugins]
+pixi-env = "https://github.com/esteve/mise-env-pixi"
+
+[env]
+_.pixi-env = { tools = true }
