@@ -1,0 +1,104 @@
+# Workflow for automated ROS package releases using release-ros-robot.
+# Drop this file into .github/workflows/ of your ROS package repository.
+#
+# How it works:
+#   1. On every push to a tracked branch the release-pr job creates or updates
+#      a release PR with an updated CHANGELOG.rst and version bump.
+#   2. When you merge that release PR the release job runs bloom-release and
+#      opens a PR on ros/rosdistro. The release job self-skips on all other
+#      pushes because they are not release commits.
+#
+# Required secrets (Settings -> Secrets and variables -> Actions):
+#   BLOOM_OAUTH_TOKEN  - GitHub PAT with public_repo and workflow scopes
+#   BLOOM_GITHUB_USER  - GitHub username that owns the PAT and the rosdistro fork
+#
+# Customize the branches list and the repository/rosdistro/track/release-repository
+# inputs below to match your package.
+#
+# Running in forks? Add the following to each job to prevent the workflow from
+# running (and failing) in forks, same pattern as the release-plz quickstart:
+#   if: ${{ github.repository_owner == 'YOUR_ORG' }}
+
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+      - jazzy
+      - humble
+
+jobs:
+  # Runs on every push. Self-skips on non-release commits.
+  # Multiple steps with different tracks are safe: the tag is created once and
+  # bloom-release is invoked for each track independently.
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      BLOOM_OAUTH_TOKEN: ${{ secrets.BLOOM_OAUTH_TOKEN }}
+      BLOOM_GITHUB_USER: ${{ secrets.BLOOM_GITHUB_USER }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Run bloom-release (main → rolling)
+        if: github.ref_name == 'main'
+        uses: esteve/release-ros-robot@v1
+        with:
+          mode: release
+          repository: my_ros_package
+          rosdistro: rolling
+          track: rolling
+          release-repository: https://github.com/ros2-gbp/my_ros_package-release.git
+
+      - name: Run bloom-release (jazzy)
+        if: github.ref_name == 'jazzy'
+        uses: esteve/release-ros-robot@v1
+        with:
+          mode: release
+          repository: my_ros_package
+          rosdistro: jazzy
+          track: jazzy
+          release-repository: https://github.com/ros2-gbp/my_ros_package-release.git
+
+      - name: Run bloom-release (humble)
+        if: github.ref_name == 'humble'
+        uses: esteve/release-ros-robot@v1
+        with:
+          mode: release
+          repository: my_ros_package
+          rosdistro: humble
+          track: humble
+          release-repository: https://github.com/ros2-gbp/my_ros_package-release.git
+
+  # Runs on every push. Self-skips when the push came from merging a release PR.
+  # The concurrency block ensures only one instance runs at a time per branch.
+  release-pr:
+    name: Release PR
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    concurrency:
+      group: release-pr-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Update release PR
+        uses: esteve/release-ros-robot@v1
+        with:
+          mode: prepare
+          base-branch: ${{ github.ref_name }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

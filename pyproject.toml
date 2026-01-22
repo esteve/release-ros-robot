@@ -1,0 +1,73 @@
+[project]
+name = "release-ros-robot"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+test = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+]
+dev = [
+    "pre-commit>=3.0.0",
+    "black>=24.1.0",
+    "ruff>=0.2.0",
+    "mypy>=1.8.0",
+]
+action = [
+    "bloom",
+    "empy",
+    "lark",
+    "rosdep",
+    "rosinstall-generator",
+    "vcs2l",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "-v",
+    "--strict-markers",
+    "--tb=short",
+    "--cov=scripts",
+    "--cov-report=term-missing",
+    "--cov-report=html",
+]
+
+[tool.coverage.run]
+source = ["scripts"]
+omit = ["tests/*", "*/site-packages/*"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+    "if typing.TYPE_CHECKING:",
+]
+
+[tool.pixi.workspace]
+name = "release-ros-robot"
+channels = ["conda-forge"]
+platforms = ["linux-64"]
+
+[tool.pixi.dependencies]
+python = "*"
+git = "*"
+gh = "*"
+
+[tool.pixi.environments]
+default = { features = ["test", "dev", "action"] }
+
+[tool.pixi.tasks]
+test = "pytest --no-cov -q"
+format-check = "black --check scripts/ tests/"
+lint = "ruff check scripts/ tests/"
+typecheck = "mypy scripts/common.py scripts/execute_release.py scripts/prepare_release.py --ignore-missing-imports"
