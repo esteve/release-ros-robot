@@ -93,9 +93,12 @@ runs:
     - name: Initialize rosdep
       if: inputs.mode == 'release'
       shell: bash
-      run: |
-        sudo rosdep init || true
-        rosdep update
+      run: pixi run --manifest-path "${{ github.action_path }}" --frozen rosdep-init
+
+    - name: Update rosdep
+      if: inputs.mode == 'release'
+      shell: bash
+      run: pixi run --manifest-path "${{ github.action_path }}" --frozen rosdep-update
 
     - name: Configure Git
       shell: bash
