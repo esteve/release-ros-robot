@@ -162,6 +162,40 @@ runs:
           exit 1
         fi
 
+    - name: Ensure rosdistro fork exists
+      if: inputs.mode == 'release'
+      shell: bash
+      env:
+        INPUT_OAUTH_TOKEN: ${{ inputs.oauth-token }}
+        INPUT_GITHUB_USER: ${{ inputs.github-user }}
+      run: |
+        export GH_TOKEN="${BLOOM_OAUTH_TOKEN:-${INPUT_OAUTH_TOKEN:-}}"
+        _USER="${BLOOM_GITHUB_USER:-${INPUT_GITHUB_USER:-}}"
+
+        if gh api "repos/${_USER}/rosdistro" --silent >/dev/null 2>&1; then
+          echo "Found existing rosdistro fork at ${_USER}/rosdistro"
+          exit 0
+        fi
+
+        echo "rosdistro fork not found for ${_USER}; creating it now"
+        gh repo fork ros/rosdistro --remote=false >/dev/null 2>&1 || true
+
+        _attempt=1
+        _max_attempts=12
+        while [ "${_attempt}" -le "${_max_attempts}" ]; do
+          if gh api "repos/${_USER}/rosdistro" --silent >/dev/null 2>&1; then
+            echo "rosdistro fork is ready at ${_USER}/rosdistro"
+            exit 0
+          fi
+
+          echo "Waiting for rosdistro fork creation to complete (attempt ${_attempt}/${_max_attempts})"
+          sleep 5
+          _attempt=$((_attempt + 1))
+        done
+
+        echo "::error::Could not find or create ${_USER}/rosdistro. Ensure BLOOM_GITHUB_USER owns the PAT and can fork ros/rosdistro."
+        exit 1
+
     - name: Prepare Release PR
       if: inputs.mode == 'prepare'
       id: prepare-release

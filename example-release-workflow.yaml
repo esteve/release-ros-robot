@@ -10,7 +10,8 @@
 #
 # Required secrets (Settings -> Secrets and variables -> Actions):
 #   BLOOM_OAUTH_TOKEN  - GitHub PAT with public_repo and workflow scopes
-#   BLOOM_GITHUB_USER  - GitHub username that owns the PAT and the rosdistro fork
+#   BLOOM_GITHUB_USER  - GitHub username that owns the PAT. The action ensures
+#                        that this user's rosdistro fork exists before bloom runs.
 #
 # Customize the branches list and the repository/rosdistro/track/release-repository
 # inputs below to match your package.
