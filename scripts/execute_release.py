@@ -13,7 +13,6 @@ import ast
 import re
 import subprocess
 import sys
-import time
 from typing import Optional
 
 from common import (
@@ -209,22 +208,46 @@ def is_release_repo_push_conflict(output: str) -> bool:
     )
 
 
-def run_bloom_release(
+def extract_rosdistro_pr_url(output: str) -> Optional[str]:
+    """Extract the rosdistro pull request URL from bloom output.
+
+    Args:
+        output: Combined stdout and stderr from bloom-release.
+
+    Returns:
+        The rosdistro PR URL if present, otherwise None.
+    """
+    pr_match = re.search(r"(https://github\.com/ros/rosdistro/pull/\d+)", output)
+    if pr_match:
+        return pr_match.group(1)
+    return None
+
+
+def run_bloom_command(
     repo_name: str,
     rosdistro: str,
     track: str,
     release_repo: str,
+    no_pull_request: bool = False,
+    pull_request_only: bool = False,
     dry_run: bool = False,
     new_track: bool = False,
-) -> Optional[str]:
-    """
-    Run bloom-release for the specified distribution.
+) -> subprocess.CompletedProcess:
+    """Run bloom-release with the requested execution mode.
+
+    Args:
+        repo_name: Repository name as registered in rosdistro.
+        rosdistro: ROS distribution to release.
+        track: Bloom track to use.
+        release_repo: Release repository URL.
+        no_pull_request: Skip opening a rosdistro PR after release actions.
+        pull_request_only: Skip release actions and only open a rosdistro PR.
+        dry_run: Run bloom in dry-run mode.
+        new_track: Create the bloom track before releasing.
 
     Returns:
-        The PR URL if successful, None otherwise
+        Completed process for the bloom invocation.
     """
-    log_info(f"Running bloom-release for {rosdistro} (track: {track})...")
-
     cmd = [
         "bloom-release",
         "--rosdistro",
@@ -237,6 +260,12 @@ def run_bloom_release(
     if new_track:
         cmd.append("--new-track")
 
+    if no_pull_request:
+        cmd.append("--no-pull-request")
+
+    if pull_request_only:
+        cmd.append("--pull-request-only")
+
     cmd.extend(["--override-release-repository-url", release_repo])
 
     if dry_run:
@@ -247,42 +276,84 @@ def run_bloom_release(
     # Run bloom-release (non-interactive mode)
     # Set BLOOM_SKIP_ROSDEP_UPDATE to speed up subsequent releases
     env = {"BLOOM_SKIP_ROSDEP_UPDATE": "1"}
+    return run_command(cmd, capture_output=True, env=env)
 
-    max_attempts = 3
-    for attempt in range(1, max_attempts + 1):
-        try:
-            result = run_command(cmd, capture_output=True, env=env)
-            output = result.stdout + result.stderr
 
-            # Extract PR URL from output
-            pr_match = re.search(
-                r"(https://github\.com/ros/rosdistro/pull/\d+)", output
+def run_bloom_release(
+    repo_name: str,
+    rosdistro: str,
+    track: str,
+    release_repo: str,
+    dry_run: bool = False,
+    new_track: bool = False,
+) -> Optional[str]:
+    """Run bloom release actions and then open the rosdistro pull request.
+
+    Args:
+        repo_name: Repository name as registered in rosdistro.
+        rosdistro: ROS distribution to release.
+        track: Bloom track to use.
+        release_repo: Release repository URL.
+        dry_run: Run bloom in dry-run mode.
+        new_track: Create the bloom track before releasing.
+
+    Returns:
+        The rosdistro PR URL if successful, otherwise None.
+    """
+    log_info(f"Running bloom-release for {rosdistro} (track: {track})...")
+
+    try:
+        run_bloom_command(
+            repo_name=repo_name,
+            rosdistro=rosdistro,
+            track=track,
+            release_repo=release_repo,
+            no_pull_request=True,
+            dry_run=dry_run,
+            new_track=new_track,
+        )
+    except subprocess.CalledProcessError as e:
+        output = (e.stdout or "") + (e.stderr or "")
+        if is_release_repo_push_conflict(output):
+            log_warning(
+                "bloom-release release-repository push raced with another job; "
+                "continuing to pull-request creation"
             )
-            if pr_match:
-                return pr_match.group(1)
-
-            log_error("bloom-release completed without producing a rosdistro PR URL")
-            if result.stdout:
-                log_error(f"bloom-release stdout:\n{result.stdout}")
-            if result.stderr:
-                log_error(f"bloom-release stderr:\n{result.stderr}")
-            return None
-
-        except subprocess.CalledProcessError as e:
-            output = (e.stdout or "") + (e.stderr or "")
-            if attempt < max_attempts and is_release_repo_push_conflict(output):
-                log_warning(
-                    "bloom-release hit a release-repository push race; retrying"
-                )
-                time.sleep(attempt)
-                continue
-
+        else:
             log_error(f"bloom-release failed: {e}")
             if e.stdout:
                 log_error(f"bloom-release stdout:\n{e.stdout}")
             if e.stderr:
                 log_error(f"bloom-release stderr:\n{e.stderr}")
             return None
+
+    try:
+        pr_result = run_bloom_command(
+            repo_name=repo_name,
+            rosdistro=rosdistro,
+            track=track,
+            release_repo=release_repo,
+            pull_request_only=True,
+            dry_run=dry_run,
+        )
+        output = pr_result.stdout + pr_result.stderr
+        pr_url = extract_rosdistro_pr_url(output)
+        if pr_url:
+            return pr_url
+
+        log_error("bloom-release completed without producing a rosdistro PR URL")
+        if pr_result.stdout:
+            log_error(f"bloom-release stdout:\n{pr_result.stdout}")
+        if pr_result.stderr:
+            log_error(f"bloom-release stderr:\n{pr_result.stderr}")
+
+    except subprocess.CalledProcessError as e:
+        log_error(f"bloom-release failed: {e}")
+        if e.stdout:
+            log_error(f"bloom-release stdout:\n{e.stdout}")
+        if e.stderr:
+            log_error(f"bloom-release stderr:\n{e.stderr}")
+        return None
 
     return None
 
