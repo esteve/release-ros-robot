@@ -31,8 +31,8 @@ on:
 
 jobs:
   # Runs on every push. Self-skips on non-release commits.
-  # Multiple steps with different tracks are safe: the tag is created once and
-  # bloom-release is invoked for each track independently.
+  # Keep releases for a shared release repository sequential. The source tag is
+  # created once, but bloom still mutates shared state in the release repo.
   release:
     name: Release
     runs-on: ubuntu-latest

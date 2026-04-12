@@ -107,6 +107,10 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 ```
 
+Keep release runs sequential when multiple tracks share the same release
+repository. The example above is sequential because each release happens in a
+separate step; if you switch to a matrix, set `strategy.max-parallel: 1`.
+
 > Running in forks? Add `if: ${{ github.repository_owner == 'YOUR_ORG' }}` to
 > each job to prevent the workflow from running (and failing) in forks. This is
 > the same pattern recommended by the
@@ -170,9 +174,11 @@ decide whether to proceed. On any other push the job exits immediately.
 5. Creates PR(s) to ros/rosdistro
 
 Because the no-op guard is commit-driven rather than tag-driven, multiple
-release steps targeting different tracks on the same branch all run on the
-same release commit. The tag is only created once (by whichever step runs
-first); subsequent steps skip tag creation but still invoke `bloom-release`.
+release steps targeting different tracks on the same branch can all operate on
+the same release commit. The source tag is only created once, but bloom still
+mutates shared state in the release repository, so releases for a shared
+release repository should run sequentially. If you use a matrix, set
+`strategy.max-parallel: 1`.
 
 ### Multi-Package Repositories
 

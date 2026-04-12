@@ -9,6 +9,7 @@ import os
 import re
 import subprocess
 import sys
+import xml.etree.ElementTree as ET
 from fnmatch import fnmatch
 from pathlib import Path
 from typing import Optional
@@ -135,11 +136,10 @@ def get_package_version(exclude_patterns: list[str]) -> str:
 
     versions: dict[Path, str] = {}
     for pkg_xml in package_xmls:
-        with open(pkg_xml) as f:
-            content = f.read()
-        match = re.search(r"<version>([^<]+)</version>", content)
-        if match:
-            versions[pkg_xml] = match.group(1)
+        root = ET.parse(pkg_xml).getroot()
+        version = root.findtext("version")
+        if version is not None and version.strip():
+            versions[pkg_xml] = version.strip()
 
     if not versions:
         return "0.0.0"
