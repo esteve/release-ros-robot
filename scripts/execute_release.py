@@ -13,6 +13,7 @@ import ast
 import re
 import subprocess
 import sys
+import xml.etree.ElementTree as ET
 from typing import Optional
 
 from common import (
@@ -27,15 +28,6 @@ from common import (
     run_command,
     set_output,
 )
-
-
-def get_current_branch() -> str:
-    """Get the current git branch name."""
-    result = run_command(
-        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-        capture_output=True,
-    )
-    return result.stdout.strip()
 
 
 def get_local_tag_target(tag: str) -> Optional[str]:
@@ -208,15 +200,13 @@ def get_package_names(exclude_patterns: list[str]) -> list[str]:
 
     package_names: set[str] = set()
     for pkg_xml in package_xmls:
-        with open(pkg_xml) as f:
-            content = f.read()
-
-        match = re.search(r"<name>([^<]+)</name>", content)
-        if match is None:
+        root = ET.parse(pkg_xml).getroot()
+        package_name = root.findtext("name")
+        if package_name is None or not package_name.strip():
             log_error(f"Could not determine package name from {pkg_xml}")
             sys.exit(1)
 
-        package_names.add(match.group(1))
+        package_names.add(package_name.strip())
 
     return sorted(package_names)
 
@@ -308,6 +298,166 @@ def release_repo_has_expected_release_tags(
     return True
 
 
+def log_bloom_failure(error: subprocess.CalledProcessError) -> None:
+    """Log a failed bloom-release subprocess with captured output.
+
+    Args:
+        error: The subprocess error raised by bloom-release.
+    """
+    log_error(f"bloom-release failed: {error}")
+    if error.stdout:
+        log_error(f"bloom-release stdout:\n{error.stdout}")
+    if error.stderr:
+        log_error(f"bloom-release stderr:\n{error.stderr}")
+
+
+def can_continue_after_release_repo_push_conflict(
+    output: str,
+    release_repo: str,
+    track: str,
+    version: Optional[str],
+    package_names: Optional[list[str]],
+) -> bool:
+    """Return True if a release-repo push conflict is safe to treat as success.
+
+    Args:
+        output: Combined stdout and stderr from bloom-release.
+        release_repo: Release repository URL.
+        track: Bloom track being released.
+        version: Package version being released.
+        package_names: Package names expected to have release tags.
+
+    Returns:
+        True if the conflict was recognized and the expected remote release tags
+        already exist, False otherwise.
+    """
+    if not is_release_repo_push_conflict(output):
+        return False
+
+    if version is None or not package_names:
+        log_error(
+            "bloom-release release-repository push raced with another job, "
+            "but the expected release tags could not be verified"
+        )
+        return False
+
+    if not release_repo_has_expected_release_tags(
+        release_repo=release_repo,
+        track=track,
+        version=version,
+        package_names=package_names,
+    ):
+        log_error(
+            "bloom-release release-repository push raced with another job, "
+            "but the expected remote release tags were not found"
+        )
+        return False
+
+    log_warning(
+        "bloom-release release-repository push raced with another job, and the "
+        "expected remote release tags already exist; continuing to pull-request "
+        "creation"
+    )
+    return True
+
+
+def run_bloom_release_phase(
+    repo_name: str,
+    rosdistro: str,
+    track: str,
+    release_repo: str,
+    version: Optional[str],
+    package_names: Optional[list[str]],
+    dry_run: bool,
+    new_track: bool,
+) -> bool:
+    """Run the release-repository mutation phase of bloom-release.
+
+    Args:
+        repo_name: Repository name as registered in rosdistro.
+        rosdistro: ROS distribution to release.
+        track: Bloom track to use.
+        release_repo: Release repository URL.
+        version: Package version being released.
+        package_names: Package names expected to have release tags.
+        dry_run: Run bloom in dry-run mode.
+        new_track: Create the bloom track before releasing.
+
+    Returns:
+        True if the release phase succeeded or a verified push-race is safe to
+        continue past, False otherwise.
+    """
+    try:
+        run_bloom_command(
+            repo_name=repo_name,
+            rosdistro=rosdistro,
+            track=track,
+            release_repo=release_repo,
+            no_pull_request=True,
+            dry_run=dry_run,
+            new_track=new_track,
+        )
+        return True
+    except subprocess.CalledProcessError as error:
+        output = (error.stdout or "") + (error.stderr or "")
+        if can_continue_after_release_repo_push_conflict(
+            output=output,
+            release_repo=release_repo,
+            track=track,
+            version=version,
+            package_names=package_names,
+        ):
+            return True
+
+        log_bloom_failure(error)
+        return False
+
+
+def run_bloom_pr_phase(
+    repo_name: str,
+    rosdistro: str,
+    track: str,
+    release_repo: str,
+    dry_run: bool,
+) -> Optional[str]:
+    """Run the rosdistro pull-request creation phase of bloom-release.
+
+    Args:
+        repo_name: Repository name as registered in rosdistro.
+        rosdistro: ROS distribution to release.
+        track: Bloom track to use.
+        release_repo: Release repository URL.
+        dry_run: Run bloom in dry-run mode.
+
+    Returns:
+        The rosdistro PR URL if successful, otherwise None.
+    """
+    try:
+        pr_result = run_bloom_command(
+            repo_name=repo_name,
+            rosdistro=rosdistro,
+            track=track,
+            release_repo=release_repo,
+            pull_request_only=True,
+            dry_run=dry_run,
+        )
+    except subprocess.CalledProcessError as error:
+        log_bloom_failure(error)
+        return None
+
+    output = pr_result.stdout + pr_result.stderr
+    pr_url = extract_rosdistro_pr_url(output)
+    if pr_url:
+        return pr_url
+
+    log_error("bloom-release completed without producing a rosdistro PR URL")
+    if pr_result.stdout:
+        log_error(f"bloom-release stdout:\n{pr_result.stdout}")
+    if pr_result.stderr:
+        log_error(f"bloom-release stderr:\n{pr_result.stderr}")
+    return None
+
+
 def run_bloom_command(
     repo_name: str,
     rosdistro: str,
@@ -391,80 +541,25 @@ def run_bloom_release(
     """
     log_info(f"Running bloom-release for {rosdistro} (track: {track})...")
 
-    try:
-        run_bloom_command(
-            repo_name=repo_name,
-            rosdistro=rosdistro,
-            track=track,
-            release_repo=release_repo,
-            no_pull_request=True,
-            dry_run=dry_run,
-            new_track=new_track,
-        )
-    except subprocess.CalledProcessError as e:
-        output = (e.stdout or "") + (e.stderr or "")
-        if is_release_repo_push_conflict(output):
-            if version is None or not package_names:
-                log_error(
-                    "bloom-release release-repository push raced with another "
-                    "job, but the expected release tags could not be verified"
-                )
-                return None
-
-            if not release_repo_has_expected_release_tags(
-                release_repo=release_repo,
-                track=track,
-                version=version,
-                package_names=package_names,
-            ):
-                log_error(
-                    "bloom-release release-repository push raced with another "
-                    "job, but the expected remote release tags were not found"
-                )
-                return None
-
-            log_warning(
-                "bloom-release release-repository push raced with another job, "
-                "and the expected remote release tags already exist; continuing "
-                "to pull-request creation"
-            )
-        else:
-            log_error(f"bloom-release failed: {e}")
-            if e.stdout:
-                log_error(f"bloom-release stdout:\n{e.stdout}")
-            if e.stderr:
-                log_error(f"bloom-release stderr:\n{e.stderr}")
-            return None
-
-    try:
-        pr_result = run_bloom_command(
-            repo_name=repo_name,
-            rosdistro=rosdistro,
-            track=track,
-            release_repo=release_repo,
-            pull_request_only=True,
-            dry_run=dry_run,
-        )
-        output = pr_result.stdout + pr_result.stderr
-        pr_url = extract_rosdistro_pr_url(output)
-        if pr_url:
-            return pr_url
-
-        log_error("bloom-release completed without producing a rosdistro PR URL")
-        if pr_result.stdout:
-            log_error(f"bloom-release stdout:\n{pr_result.stdout}")
-        if pr_result.stderr:
-            log_error(f"bloom-release stderr:\n{pr_result.stderr}")
-
-    except subprocess.CalledProcessError as e:
-        log_error(f"bloom-release failed: {e}")
-        if e.stdout:
-            log_error(f"bloom-release stdout:\n{e.stdout}")
-        if e.stderr:
-            log_error(f"bloom-release stderr:\n{e.stderr}")
+    if not run_bloom_release_phase(
+        repo_name=repo_name,
+        rosdistro=rosdistro,
+        track=track,
+        release_repo=release_repo,
+        version=version,
+        package_names=package_names,
+        dry_run=dry_run,
+        new_track=new_track,
+    ):
         return None
 
-    return None
+    return run_bloom_pr_phase(
+        repo_name=repo_name,
+        rosdistro=rosdistro,
+        track=track,
+        release_repo=release_repo,
+        dry_run=dry_run,
+    )
 
 
 def parse_track_list(output: str) -> Optional[set[str]]:

@@ -14,7 +14,6 @@ from execute_release import (
     check_track_exists,
     ensure_release_tag,
     extract_rosdistro_pr_url,
-    get_current_branch,
     get_local_tag_target,
     get_package_names,
     get_remote_tag_target,
@@ -26,17 +25,22 @@ from execute_release import (
 )
 
 
-class TestGetCurrentBranch:
-    """Tests for get_current_branch function."""
+class TestGitBranchState:
+    """Tests for git branch state used by execute_release.py."""
 
-    def test_get_current_branch(self, temp_git_repo: Path):
-        """Test getting the current branch name."""
+    def test_current_branch_in_temp_repo(self, temp_git_repo: Path) -> None:
+        """Test the temporary repository reports the expected current branch."""
         os.chdir(temp_git_repo)
         subprocess.run(
             ["git", "checkout", "-b", "test-branch"], check=True, capture_output=True
         )
 
-        branch = get_current_branch()
+        branch = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
         assert branch == "test-branch"
 
 
@@ -707,8 +711,8 @@ class TestIntegration:
         mock_run,
         temp_git_repo: Path,
         package_xml_content: str,
-    ):
-        """Test that get_package_version and get_current_branch work in a temp git repo."""
+    ) -> None:
+        """Test version parsing and branch detection in a temp git repo."""
         os.chdir(temp_git_repo)
 
         # Setup package.xml
@@ -720,7 +724,12 @@ class TestIntegration:
         )
 
         version = get_package_version([])
-        branch = get_current_branch()
+        branch = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
 
         assert version == "1.2.3"
         assert branch in ["main", "master"]  # Git default branch
@@ -730,9 +739,9 @@ class TestReleaseNoOp:
     """Tests for the release self-no-op guard.
 
     The guard is commit-driven: non-release commits are no-ops regardless of
-    tag state.  This allows multiple release steps for different tracks on the
-    same release commit to all proceed, an existing tag from the first step
-    does not cause subsequent steps to skip.
+    tag state. Existing source tags do not cause later non-release pushes to
+    retrigger bloom, and an existing source tag does not prevent a release
+    commit from proceeding.
     """
 
     def _commit(self, repo: Path, message: str, filename: str = "file.txt") -> None:
@@ -745,7 +754,7 @@ class TestReleaseNoOp:
 
     def test_non_release_commit_is_no_op(
         self, temp_git_repo: Path, package_xml_content: str
-    ):
+    ) -> None:
         """A regular push (non-release commit) → is_release_commit() is False."""
         os.chdir(temp_git_repo)
         (temp_git_repo / "package.xml").write_text(package_xml_content)
@@ -755,7 +764,7 @@ class TestReleaseNoOp:
 
     def test_release_commit_with_no_tag_proceeds(
         self, temp_git_repo: Path, package_xml_content: str
-    ):
+    ) -> None:
         """Release commit + no existing tag → is_release_commit() True, no tag yet."""
         os.chdir(temp_git_repo)
         (temp_git_repo / "package.xml").write_text(package_xml_content)
@@ -768,12 +777,11 @@ class TestReleaseNoOp:
 
     def test_release_commit_with_existing_tag_still_proceeds(
         self, temp_git_repo: Path, package_xml_content: str
-    ):
+    ) -> None:
         """Release commit + tag already exists → is_release_commit() True.
 
-        This is the multi-track case: a second release step for a different
-        track should still run bloom even though the first step already created
-        the tag.
+        This verifies the source-tag guard is not tag-driven: an existing tag
+        does not suppress a real release commit.
         """
         os.chdir(temp_git_repo)
         (temp_git_repo / "package.xml").write_text(package_xml_content)
@@ -792,7 +800,7 @@ class TestReleaseNoOp:
 
     def test_non_release_commit_with_existing_tag_is_no_op(
         self, temp_git_repo: Path, package_xml_content: str
-    ):
+    ) -> None:
         """Non-release push after a release → no-op even if tag matches version.
 
         Verifies that a later unrelated commit on the same branch does not
