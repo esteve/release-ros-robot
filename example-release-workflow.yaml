@@ -31,8 +31,8 @@ on:
 
 jobs:
   # Runs on every push. Self-skips on non-release commits.
-  # Keep releases for a shared release repository sequential. The source tag is
-  # created once, but bloom still mutates shared state in the release repo.
+  # Keep releases for a shared release repository sequential. The targets input
+  # does that inside one action invocation.
   release:
     name: Release
     runs-on: ubuntu-latest
@@ -48,35 +48,22 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Run bloom-release (main → rolling)
-        if: github.ref_name == 'main'
+      - name: Run bloom-release targets
         uses: esteve/release-ros-robot@v1
         with:
           mode: release
           repository: my_ros_package
-          rosdistro: rolling
-          track: rolling
           release-repository: https://github.com/ros2-gbp/my_ros_package-release.git
-
-      - name: Run bloom-release (jazzy)
-        if: github.ref_name == 'jazzy'
-        uses: esteve/release-ros-robot@v1
-        with:
-          mode: release
-          repository: my_ros_package
-          rosdistro: jazzy
-          track: jazzy
-          release-repository: https://github.com/ros2-gbp/my_ros_package-release.git
-
-      - name: Run bloom-release (humble)
-        if: github.ref_name == 'humble'
-        uses: esteve/release-ros-robot@v1
-        with:
-          mode: release
-          repository: my_ros_package
-          rosdistro: humble
-          track: humble
-          release-repository: https://github.com/ros2-gbp/my_ros_package-release.git
+          targets: |
+            main:
+              - rosdistro: rolling
+                track: rolling
+            jazzy:
+              - rosdistro: jazzy
+                track: jazzy
+            humble:
+              - rosdistro: humble
+                track: humble
 
   # Runs on every push. Self-skips when the push came from merging a release PR.
   # The concurrency block ensures only one instance runs at a time per branch.

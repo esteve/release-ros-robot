@@ -19,6 +19,7 @@ action = [
     "bloom",
     "empy",
     "lark",
+    "pyyaml",
     "rosdep",
     "rosinstall-generator",
     # bloom 0.13 still imports pkg_resources; remove this pin once bloom > 0.13

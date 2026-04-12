@@ -6,6 +6,8 @@ import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 # Add scripts directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
@@ -18,9 +20,12 @@ from execute_release import (
     get_package_names,
     get_remote_tag_target,
     is_release_repo_push_conflict,
+    parse_targets_yaml,
     parse_remote_tag_target,
     parse_track_list,
     release_repo_has_expected_release_tags,
+    resolve_release_targets,
+    run_single_target_release,
     run_bloom_release,
 )
 
@@ -145,6 +150,72 @@ class TestPackageNames:
         assert result == ["pkg_a", "pkg_b"]
 
 
+class TestTargetsYaml:
+    """Tests for YAML batch target parsing."""
+
+    def test_parse_targets_yaml(self) -> None:
+        """Test parsing branch-mapped sequential targets."""
+        parsed = parse_targets_yaml(
+            "main:\n"
+            "  - rosdistro: rolling\n"
+            "    track: rolling\n"
+            "  - rosdistro: jazzy\n"
+            "    track: jazzy\n"
+        )
+
+        assert parsed == {
+            "main": [
+                {"rosdistro": "rolling", "track": "rolling"},
+                {"rosdistro": "jazzy", "track": "jazzy"},
+            ]
+        }
+
+    def test_resolve_release_targets_for_current_branch(self) -> None:
+        """Test target resolution preserves order for the current branch."""
+        targets = resolve_release_targets(
+            current_branch="main",
+            rosdistro=None,
+            track=None,
+            targets_text=(
+                "main:\n"
+                "  - rosdistro: rolling\n"
+                "    track: rolling\n"
+                "  - rosdistro: jazzy\n"
+                "    track: jazzy\n"
+                "humble:\n"
+                "  - rosdistro: humble\n"
+                "    track: humble\n"
+            ),
+        )
+
+        assert targets == [
+            {"rosdistro": "rolling", "track": "rolling"},
+            {"rosdistro": "jazzy", "track": "jazzy"},
+        ]
+
+    def test_resolve_release_targets_for_unmatched_branch(self) -> None:
+        """Test unmatched branches resolve to an empty target list."""
+        targets = resolve_release_targets(
+            current_branch="other",
+            rosdistro=None,
+            track=None,
+            targets_text="main:\n  - rosdistro: rolling\n    track: rolling\n",
+        )
+
+        assert targets == []
+
+    def test_resolve_release_targets_single_target_mode(self) -> None:
+        """Test explicit rosdistro/track inputs still resolve as one target."""
+        targets = resolve_release_targets(
+            current_branch="main",
+            rosdistro="rolling",
+            track="rolling",
+            targets_text=None,
+        )
+
+        assert targets == [{"rosdistro": "rolling", "track": "rolling"}]
+
+
 class TestReleaseRepoVerification:
     """Tests for release-repository state verification."""
 
@@ -186,6 +257,43 @@ class TestReleaseRepoVerification:
         )
 
         assert result is False
+
+
+class TestRunSingleTargetRelease:
+    """Tests for single-target release execution."""
+
+    @patch("execute_release.run_bloom_release")
+    @patch("execute_release.check_track_exists")
+    def test_run_single_target_release_existing_track(
+        self, mock_check_track_exists, mock_run_bloom_release
+    ) -> None:
+        """Test single-target execution passes through the resolved bloom settings."""
+        mock_check_track_exists.return_value = True
+        mock_run_bloom_release.return_value = (
+            "https://github.com/ros/rosdistro/pull/123"
+        )
+
+        result = run_single_target_release(
+            repo_name="test_package",
+            rosdistro="rolling",
+            track="rolling",
+            release_repo="https://github.com/ros2-gbp/test_package-release.git",
+            version="1.2.3",
+            package_names=["test_package"],
+            dry_run=False,
+        )
+
+        assert result == "https://github.com/ros/rosdistro/pull/123"
+        mock_run_bloom_release.assert_called_once_with(
+            repo_name="test_package",
+            rosdistro="rolling",
+            track="rolling",
+            release_repo="https://github.com/ros2-gbp/test_package-release.git",
+            version="1.2.3",
+            package_names=["test_package"],
+            dry_run=False,
+            new_track=False,
+        )
 
 
 class TestTagHelpers:
@@ -733,6 +841,156 @@ class TestIntegration:
 
         assert version == "1.2.3"
         assert branch in ["main", "master"]  # Git default branch
+
+
+class TestMainTargetsMode:
+    """Tests for the batch targets mode in main()."""
+
+    @patch("execute_release.set_output")
+    @patch("execute_release.run_single_target_release")
+    @patch("execute_release.ensure_release_tag")
+    @patch("execute_release.get_package_names")
+    @patch("execute_release.get_package_version")
+    @patch("execute_release.is_release_commit")
+    @patch("execute_release.get_exclude_paths_from_env")
+    @patch("execute_release.parse_args")
+    def test_main_runs_targets_sequentially(
+        self,
+        mock_parse_args,
+        mock_get_exclude_paths,
+        mock_is_release_commit,
+        mock_get_package_version,
+        mock_get_package_names,
+        mock_ensure_release_tag,
+        mock_run_single_target_release,
+        mock_set_output,
+    ) -> None:
+        """Test batch mode runs matching targets in declared order."""
+        mock_parse_args.return_value = MagicMock(
+            repository="test_package",
+            release_repository="https://github.com/ros2-gbp/test_package-release.git",
+            rosdistro=None,
+            track=None,
+            targets=(
+                "main:\n"
+                "  - rosdistro: rolling\n"
+                "    track: rolling\n"
+                "  - rosdistro: jazzy\n"
+                "    track: jazzy\n"
+            ),
+            current_branch="main",
+            dry_run=False,
+        )
+        mock_get_exclude_paths.return_value = []
+        mock_is_release_commit.return_value = True
+        mock_get_package_version.return_value = "1.2.3"
+        mock_get_package_names.return_value = ["test_package"]
+        mock_ensure_release_tag.return_value = True
+        mock_run_single_target_release.side_effect = [
+            "https://github.com/ros/rosdistro/pull/123",
+            "https://github.com/ros/rosdistro/pull/124",
+        ]
+
+        from execute_release import main
+
+        main()
+
+        assert mock_run_single_target_release.call_count == 2
+        first_call = mock_run_single_target_release.call_args_list[0].kwargs
+        second_call = mock_run_single_target_release.call_args_list[1].kwargs
+        assert first_call["rosdistro"] == "rolling"
+        assert first_call["track"] == "rolling"
+        assert second_call["rosdistro"] == "jazzy"
+        assert second_call["track"] == "jazzy"
+        mock_set_output.assert_any_call("released", "true")
+        mock_set_output.assert_any_call("version", "1.2.3")
+
+    @patch("execute_release.set_output")
+    @patch("execute_release.get_package_names")
+    @patch("execute_release.get_package_version")
+    @patch("execute_release.is_release_commit")
+    @patch("execute_release.get_exclude_paths_from_env")
+    @patch("execute_release.parse_args")
+    def test_main_no_matching_targets_is_no_op(
+        self,
+        mock_parse_args,
+        mock_get_exclude_paths,
+        mock_is_release_commit,
+        mock_get_package_version,
+        mock_get_package_names,
+        mock_set_output,
+    ) -> None:
+        """Test batch mode no-ops cleanly when no targets match the branch."""
+        mock_parse_args.return_value = MagicMock(
+            repository="test_package",
+            release_repository="https://github.com/ros2-gbp/test_package-release.git",
+            rosdistro=None,
+            track=None,
+            targets="main:\n  - rosdistro: rolling\n    track: rolling\n",
+            current_branch="jazzy",
+            dry_run=False,
+        )
+        mock_get_exclude_paths.return_value = []
+        mock_is_release_commit.return_value = True
+        mock_get_package_version.return_value = "1.2.3"
+        mock_get_package_names.return_value = ["test_package"]
+
+        from execute_release import main
+
+        main()
+
+        mock_set_output.assert_any_call("released", "false")
+        mock_set_output.assert_any_call("version", "1.2.3")
+
+    @patch("execute_release.set_output")
+    @patch("execute_release.run_single_target_release")
+    @patch("execute_release.ensure_release_tag")
+    @patch("execute_release.get_package_names")
+    @patch("execute_release.get_package_version")
+    @patch("execute_release.is_release_commit")
+    @patch("execute_release.get_exclude_paths_from_env")
+    @patch("execute_release.parse_args")
+    def test_main_batch_mode_fails_fast(
+        self,
+        mock_parse_args,
+        mock_get_exclude_paths,
+        mock_is_release_commit,
+        mock_get_package_version,
+        mock_get_package_names,
+        mock_ensure_release_tag,
+        mock_run_single_target_release,
+        mock_set_output,
+    ) -> None:
+        """Test batch mode stops on the first failed target."""
+        mock_parse_args.return_value = MagicMock(
+            repository="test_package",
+            release_repository="https://github.com/ros2-gbp/test_package-release.git",
+            rosdistro=None,
+            track=None,
+            targets=(
+                "main:\n"
+                "  - rosdistro: rolling\n"
+                "    track: rolling\n"
+                "  - rosdistro: jazzy\n"
+                "    track: jazzy\n"
+            ),
+            current_branch="main",
+            dry_run=False,
+        )
+        mock_get_exclude_paths.return_value = []
+        mock_is_release_commit.return_value = True
+        mock_get_package_version.return_value = "1.2.3"
+        mock_get_package_names.return_value = ["test_package"]
+        mock_ensure_release_tag.return_value = True
+        mock_run_single_target_release.side_effect = [None]
+
+        from execute_release import main
+
+        with pytest.raises(SystemExit):
+            main()
+
+        assert mock_run_single_target_release.call_count == 1
+        mock_set_output.assert_any_call("released", "false")
 
 
 class TestReleaseNoOp:

@@ -31,6 +31,13 @@ inputs:
       Release repository URL (e.g., https://github.com/ros2-gbp/my_package-release.git).
       Required in release mode.
     required: false
+  targets:
+    description: >
+      YAML block string mapping branch names to sequential release targets.
+      Each target entry must contain rosdistro and track. Release mode accepts
+      either targets or the explicit rosdistro/track pair.
+    required: false
+    default: ''
   rosdistro:
     description: >
       ROS distribution to release (e.g., rolling, jazzy, humble).
@@ -77,6 +84,9 @@ outputs:
   pr-url:
     description: 'The URL of the release PR (prepare mode) or rosdistro pull request (release mode)'
     value: ${{ steps.prepare-release.outputs.pr-url || steps.bloom-release.outputs.pr-url }}
+  results-json:
+    description: 'JSON array of per-target release results (release batch mode only)'
+    value: ${{ steps.bloom-release.outputs.results-json }}
 
 runs:
   using: 'composite'
@@ -173,12 +183,25 @@ runs:
       run: |
         _missing=""
         [ -z "${{ inputs.repository }}" ]         && _missing="$_missing repository"
-        [ -z "${{ inputs.rosdistro }}" ]           && _missing="$_missing rosdistro"
-        [ -z "${{ inputs.track }}" ]               && _missing="$_missing track"
         [ -z "${{ inputs.release-repository }}" ]  && _missing="$_missing release-repository"
         if [ -n "$_missing" ]; then
           echo "::error::release mode requires the following inputs:$_missing"
           exit 1
+        fi
+
+        if [ -n "${{ inputs.targets }}" ]; then
+          if [ -n "${{ inputs.rosdistro }}" ] || [ -n "${{ inputs.track }}" ]; then
+            echo "::error::release mode accepts either targets or the rosdistro/track inputs, but not both."
+            exit 1
+          fi
+        else
+          _target_missing=""
+          [ -z "${{ inputs.rosdistro }}" ]  && _target_missing="$_target_missing rosdistro"
+          [ -z "${{ inputs.track }}" ]      && _target_missing="$_target_missing track"
+          if [ -n "$_target_missing" ]; then
+            echo "::error::release mode requires either targets or the following inputs:$_target_missing"
+            exit 1
+          fi
         fi
 
     - name: Ensure rosdistro fork exists
@@ -235,14 +258,22 @@ runs:
       env:
         INPUT_OAUTH_TOKEN: ${{ inputs.oauth-token }}
         BLOOM_EXCLUDE_PATHS: ${{ inputs.exclude-paths }}
+        INPUT_TARGETS: ${{ inputs.targets }}
       run: |
         export GH_TOKEN="${BLOOM_OAUTH_TOKEN:-${INPUT_OAUTH_TOKEN:-}}"
-        ARGS="--repository ${{ inputs.repository }}"
-        ARGS="$ARGS --rosdistro ${{ inputs.rosdistro }}"
-        ARGS="$ARGS --track ${{ inputs.track }}"
-        ARGS="$ARGS --release-repository ${{ inputs.release-repository }}"
+        ARGS=(
+          --repository "${{ inputs.repository }}"
+          --release-repository "${{ inputs.release-repository }}"
+          --current-branch "${{ github.ref_name }}"
+        )
+        if [ -n "${INPUT_TARGETS}" ]; then
+          ARGS+=(--targets "${INPUT_TARGETS}")
+        else
+          ARGS+=(--rosdistro "${{ inputs.rosdistro }}")
+          ARGS+=(--track "${{ inputs.track }}")
+        fi
         if [ "${{ inputs.dry-run }}" = "true" ]; then
-          ARGS="$ARGS --dry-run"
+          ARGS+=(--dry-run)
         fi
         pixi run --manifest-path "${{ github.action_path }}" \
-          python "${{ github.action_path }}/scripts/execute_release.py" $ARGS
+          python "${{ github.action_path }}/scripts/execute_release.py" "${ARGS[@]}"

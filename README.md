@@ -19,6 +19,10 @@ Users familiar with [release-please](https://github.com/googleapis/release-pleas
 1. When you merge PRs to `main`, the action creates/updates a release PR with changelog and version bump
 2. When you merge the release PR, the action automatically runs `bloom-release` for configured ROS distros
 
+For repositories that release multiple tracks into the same release repository,
+prefer the `targets` input shown below so the action can run them sequentially
+inside a single invocation.
+
 ### 1. Create the GitHub workflow
 
 Create `.github/workflows/bloom-release.yaml`:
@@ -50,35 +54,22 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Run bloom-release (main → rolling)
-        if: github.ref_name == 'main'
-        uses: esteve/release-ros-robot@v0
+      - name: Run bloom-release targets
+        uses: esteve/release-ros-robot@v1
         with:
           mode: release
           repository: my_ros_package
-          rosdistro: rolling
-          track: rolling
           release-repository: https://github.com/ros2-gbp/my_ros_package-release.git
-
-      - name: Run bloom-release (jazzy)
-        if: github.ref_name == 'jazzy'
-        uses: esteve/release-ros-robot@v0
-        with:
-          mode: release
-          repository: my_ros_package
-          rosdistro: jazzy
-          track: jazzy
-          release-repository: https://github.com/ros2-gbp/my_ros_package-release.git
-
-      - name: Run bloom-release (humble)
-        if: github.ref_name == 'humble'
-        uses: esteve/release-ros-robot@v0
-        with:
-          mode: release
-          repository: my_ros_package
-          rosdistro: humble
-          track: humble
-          release-repository: https://github.com/ros2-gbp/my_ros_package-release.git
+          targets: |
+            main:
+              - rosdistro: rolling
+                track: rolling
+            jazzy:
+              - rosdistro: jazzy
+                track: jazzy
+            humble:
+              - rosdistro: humble
+                track: humble
 
   # Runs on every push. Self-skips when the push came from merging a release PR.
   # The concurrency block ensures only one instance runs at a time per branch.
@@ -108,8 +99,8 @@ jobs:
 ```
 
 Keep release runs sequential when multiple tracks share the same release
-repository. The example above is sequential because each release happens in a
-separate step; if you switch to a matrix, set `strategy.max-parallel: 1`.
+repository. The `targets` input does that inside one action invocation. If you
+switch back to a matrix, set `strategy.max-parallel: 1`.
 
 > Running in forks? Add `if: ${{ github.repository_owner == 'YOUR_ORG' }}` to
 > each job to prevent the workflow from running (and failing) in forks. This is
@@ -169,15 +160,16 @@ decide whether to proceed. On any other push the job exits immediately.
 1. Reads version from `package.xml` (already updated by prepare mode)
 2. Creates git tag with version number (idempotent. Skips if tag already exists)
 3. Ensures the PAT owner's `rosdistro` fork exists
-4. Runs `bloom-release` with the explicitly provided repository, distribution,
-   track, and release repository
+4. Runs `bloom-release` with the explicitly provided repository, release
+   repository, and either one explicit distribution/track pair or the
+   branch-selected entries from `targets`
 5. Creates PR(s) to ros/rosdistro
 
-Because the no-op guard is commit-driven rather than tag-driven, multiple
-release steps targeting different tracks on the same branch can all operate on
-the same release commit. The source tag is only created once, but bloom still
-mutates shared state in the release repository, so releases for a shared
-release repository should run sequentially. If you use a matrix, set
+Because the no-op guard is commit-driven rather than tag-driven, a release
+commit can safely fan out into multiple sequential targets. The source tag is
+created once, but bloom still mutates shared state in the release repository,
+so shared release repositories should be processed sequentially. Prefer the
+`targets` input for this; if you use a matrix instead, set
 `strategy.max-parallel: 1`.
 
 ### Multi-Package Repositories
@@ -249,6 +241,7 @@ this exclusion, fixture `package.xml` files would be:
 | `rosdistro` | ROS distribution to release (e.g., `rolling`, `jazzy`). Required in release mode. | No | - |
 | `track` | Bloom track to use (e.g., `rolling`, `jazzy`). Required in release mode. | No | - |
 | `release-repository` | Release repository URL (e.g., `https://github.com/ros2-gbp/my_package-release.git`). Required in release mode. | No | - |
+| `targets` | YAML block string mapping branches to sequential release targets. Release mode accepts either `targets` or the explicit `rosdistro`/`track` pair. | No | - |
 | `dry-run` | Run without actually releasing | No | `false` |
 | `exclude-paths` | Newline-separated glob patterns to exclude from `package.xml` discovery | No | - |
 | `version-bump` | Version bump type: `auto`, `patch`, `minor`, `major` | No | `auto` |
@@ -263,6 +256,7 @@ this exclusion, fixture `package.xml` files would be:
 | `version` | The version that was released or will be released |
 | `rosdistro` | The ROS distribution released to (`release` mode) |
 | `pr-url` | URL of the release PR or rosdistro PR |
+| `results-json` | JSON array of per-target release results in batch release mode |
 
 
 ## Conventional Commits

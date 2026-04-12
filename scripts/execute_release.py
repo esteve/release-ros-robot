@@ -10,11 +10,14 @@ It performs the following steps:
 
 import argparse
 import ast
+import json
 import re
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
 from typing import Optional
+
+import yaml
 
 from common import (
     discover_package_xmls,
@@ -28,6 +31,8 @@ from common import (
     run_command,
     set_output,
 )
+
+Target = dict[str, str]
 
 
 def get_local_tag_target(tag: str) -> Optional[str]:
@@ -562,6 +567,160 @@ def run_bloom_release(
     )
 
 
+def parse_targets_yaml(targets_text: str) -> dict[str, list[Target]]:
+    """Parse the YAML block string for sequential release targets.
+
+    Args:
+        targets_text: YAML block string mapping branches to target lists.
+
+    Returns:
+        Mapping of branch name to ordered list of release targets.
+    """
+    try:
+        parsed = yaml.safe_load(targets_text)
+    except yaml.YAMLError as error:
+        log_error(f"Failed to parse targets YAML: {error}")
+        sys.exit(1)
+
+    if not isinstance(parsed, dict):
+        log_error("targets must parse to a mapping of branches to target lists")
+        sys.exit(1)
+
+    branch_targets: dict[str, list[Target]] = {}
+    for branch, targets in parsed.items():
+        if not isinstance(branch, str) or not branch.strip():
+            log_error("targets keys must be non-empty branch names")
+            sys.exit(1)
+
+        if not isinstance(targets, list):
+            log_error(f"targets for branch '{branch}' must be a list")
+            sys.exit(1)
+
+        parsed_targets: list[Target] = []
+        for index, target in enumerate(targets, start=1):
+            if not isinstance(target, dict):
+                log_error(
+                    f"targets entry {index} for branch '{branch}' must be a mapping"
+                )
+                sys.exit(1)
+
+            allowed_keys = {"rosdistro", "track"}
+            unknown_keys = set(target) - allowed_keys
+            if unknown_keys:
+                keys = ", ".join(sorted(unknown_keys))
+                log_error(
+                    f"targets entry {index} for branch '{branch}' has unknown keys: {keys}"
+                )
+                sys.exit(1)
+
+            rosdistro = target.get("rosdistro")
+            track = target.get("track")
+            if not isinstance(rosdistro, str) or not rosdistro.strip():
+                log_error(
+                    f"targets entry {index} for branch '{branch}' is missing rosdistro"
+                )
+                sys.exit(1)
+            if not isinstance(track, str) or not track.strip():
+                log_error(
+                    f"targets entry {index} for branch '{branch}' is missing track"
+                )
+                sys.exit(1)
+
+            parsed_targets.append(
+                {
+                    "rosdistro": rosdistro.strip(),
+                    "track": track.strip(),
+                }
+            )
+
+        branch_targets[branch.strip()] = parsed_targets
+
+    return branch_targets
+
+
+def resolve_release_targets(
+    current_branch: str,
+    rosdistro: Optional[str],
+    track: Optional[str],
+    targets_text: Optional[str],
+) -> list[Target]:
+    """Resolve release targets for the current branch.
+
+    Args:
+        current_branch: Current Git branch name.
+        rosdistro: Explicit single-target rosdistro.
+        track: Explicit single-target track.
+        targets_text: YAML block string for batch release mode.
+
+    Returns:
+        Ordered list of targets to execute.
+    """
+    if targets_text:
+        if rosdistro or track:
+            log_error(
+                "Use either targets or the explicit rosdistro/track inputs, not both"
+            )
+            sys.exit(1)
+
+        return parse_targets_yaml(targets_text).get(current_branch, [])
+
+    if not rosdistro or not track:
+        log_error("release mode requires either targets or both rosdistro and track")
+        sys.exit(1)
+
+    return [{"rosdistro": rosdistro, "track": track}]
+
+
+def run_single_target_release(
+    repo_name: str,
+    rosdistro: str,
+    track: str,
+    release_repo: str,
+    version: str,
+    package_names: list[str],
+    dry_run: bool,
+) -> Optional[str]:
+    """Run the release flow for a single rosdistro/track target.
+
+    Args:
+        repo_name: Repository name as registered in rosdistro.
+        rosdistro: ROS distribution to release.
+        track: Bloom track to use.
+        release_repo: Release repository URL.
+        version: Package version being released.
+        package_names: Package names expected to have release tags.
+        dry_run: Run bloom in dry-run mode.
+
+    Returns:
+        The rosdistro PR URL if successful, otherwise None.
+    """
+    track_exists = check_track_exists(
+        repo_name=repo_name,
+        rosdistro=rosdistro,
+        track=track,
+        release_repo=release_repo,
+    )
+    new_track = track_exists is False
+    if new_track:
+        log_info(f"Track '{track}' does not exist, will create new track")
+    elif track_exists is None:
+        log_warning(
+            f"Could not determine whether track '{track}' exists; "
+            "running bloom-release without --new-track"
+        )
+
+    return run_bloom_release(
+        repo_name=repo_name,
+        rosdistro=rosdistro,
+        track=track,
+        release_repo=release_repo,
+        version=version,
+        package_names=package_names,
+        dry_run=dry_run,
+        new_track=new_track,
+    )
+
+
 def parse_track_list(output: str) -> Optional[set[str]]:
     """Parse track names from bloom-release --list-tracks output.
 
@@ -650,18 +809,24 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--rosdistro",
-        required=True,
         help="ROS distribution to release (e.g., rolling, jazzy, humble)",
     )
     parser.add_argument(
         "--track",
-        required=True,
         help="Bloom track to use (e.g., rolling, jazzy)",
     )
     parser.add_argument(
         "--release-repository",
         required=True,
         help="Release repository URL (e.g., https://github.com/ros2-gbp/my_package-release.git)",
+    )
+    parser.add_argument(
+        "--targets",
+        help="YAML block string mapping branches to sequential release targets",
+    )
+    parser.add_argument(
+        "--current-branch",
+        help="Current branch name used to select entries from --targets",
     )
     parser.add_argument(
         "--dry-run",
@@ -677,11 +842,35 @@ def main() -> None:
     args = parse_args()
 
     exclude_paths = get_exclude_paths_from_env()
+    current_branch = (
+        args.current_branch
+        or run_command(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"], capture_output=True
+        ).stdout.strip()
+    )
+    targets = resolve_release_targets(
+        current_branch=current_branch,
+        rosdistro=args.rosdistro,
+        track=args.track,
+        targets_text=args.targets,
+    )
 
     log_info(f"Repository: {args.repository}")
-    log_info(f"ROS Distribution: {args.rosdistro}")
-    log_info(f"Track: {args.track}")
+    log_info(f"Current branch: {current_branch}")
     log_info(f"Release repository: {args.release_repository}")
+    if args.targets:
+        if targets:
+            log_info(
+                "Matched release targets: "
+                + ", ".join(
+                    f"{target['rosdistro']}/{target['track']}" for target in targets
+                )
+            )
+        else:
+            log_info(f"No release targets configured for branch '{current_branch}'")
+    else:
+        log_info(f"ROS Distribution: {args.rosdistro}")
+        log_info(f"Track: {args.track}")
 
     # Note: Changelog generation is done in prepare_release.py
     # This script only creates git tags and runs bloom-release
@@ -697,7 +886,14 @@ def main() -> None:
         log_info("HEAD is not a release commit, nothing to release")
         set_output("released", "false")
         set_output("version", get_package_version(exclude_paths))
-        set_output("rosdistro", args.rosdistro)
+        if args.rosdistro:
+            set_output("rosdistro", args.rosdistro)
+        return
+
+    if not targets:
+        log_info("No release targets matched the current branch, nothing to release")
+        set_output("released", "false")
+        set_output("version", get_package_version(exclude_paths))
         return
 
     # Get the version from package.xml (already set by prepare_release.py)
@@ -705,60 +901,62 @@ def main() -> None:
     package_names = get_package_names(exclude_paths)
     log_info(f"Releasing version: {version}")
 
+    if args.dry_run:
+        log_warning("Dry-run mode enabled, skipping actual release")
+        set_output("released", "false")
+        set_output("version", version)
+        if len(targets) == 1:
+            set_output("rosdistro", targets[0]["rosdistro"])
+        return
+
     # Optimistic tag creation: in a parallel matrix another job may create the
     # same annotated tag first. Treat that as success only when the tag resolves
     # to this job's HEAD commit.
     if not ensure_release_tag(version):
         set_output("released", "false")
         set_output("version", version)
-        set_output("rosdistro", args.rosdistro)
+        if len(targets) == 1:
+            set_output("rosdistro", targets[0]["rosdistro"])
         sys.exit(1)
 
-    # Check if this is a new track
-    track_exists = check_track_exists(
-        repo_name=args.repository,
-        rosdistro=args.rosdistro,
-        track=args.track,
-        release_repo=args.release_repository,
-    )
-    new_track = track_exists is False
-    if new_track:
-        log_info(f"Track '{args.track}' does not exist, will create new track")
-    elif track_exists is None:
-        log_warning(
-            f"Could not determine whether track '{args.track}' exists; "
-            "running bloom-release without --new-track"
+    results: list[dict[str, Optional[str] | bool]] = []
+    for target in targets:
+        rosdistro = target["rosdistro"]
+        track = target["track"]
+        pr_url = run_single_target_release(
+            repo_name=args.repository,
+            rosdistro=rosdistro,
+            track=track,
+            release_repo=args.release_repository,
+            version=version,
+            package_names=package_names,
+            dry_run=args.dry_run,
+        )
+        if pr_url is None:
+            log_error(f"Release failed for {rosdistro}/{track}")
+            set_output("released", "false")
+            set_output("version", version)
+            if len(targets) == 1:
+                set_output("rosdistro", rosdistro)
+            sys.exit(1)
+
+        log_success(f"Release PR created for {rosdistro}/{track}: {pr_url}")
+        results.append(
+            {
+                "branch": current_branch,
+                "rosdistro": rosdistro,
+                "track": track,
+                "released": True,
+                "pr_url": pr_url,
+            }
         )
 
-    # Run bloom-release
-    if args.dry_run:
-        log_warning("Dry-run mode enabled, skipping actual release")
-        set_output("released", "false")
-        set_output("version", version)
-        set_output("rosdistro", args.rosdistro)
-        return
-
-    pr_url = run_bloom_release(
-        repo_name=args.repository,
-        rosdistro=args.rosdistro,
-        track=args.track,
-        release_repo=args.release_repository,
-        version=version,
-        package_names=package_names,
-        dry_run=args.dry_run,
-        new_track=new_track,
-    )
-
-    if pr_url:
-        log_success(f"Release PR created: {pr_url}")
-        set_output("released", "true")
-        set_output("version", version)
-        set_output("rosdistro", args.rosdistro)
-        set_output("pr-url", pr_url)
-    else:
-        log_error("Release failed")
-        set_output("released", "false")
-        sys.exit(1)
+    set_output("released", "true")
+    set_output("version", version)
+    set_output("results-json", json.dumps(results))
+    if len(targets) == 1:
+        set_output("rosdistro", targets[0]["rosdistro"])
+        set_output("pr-url", str(results[0]["pr_url"]))
 
 
 if __name__ == "__main__":
