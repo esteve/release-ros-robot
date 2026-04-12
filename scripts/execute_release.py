@@ -54,7 +54,14 @@ def run_bloom_release(
     """
     log_info(f"Running bloom-release for {rosdistro} (track: {track})...")
 
-    cmd = ["bloom-release", "--rosdistro", rosdistro, "--track", track]
+    cmd = [
+        "bloom-release",
+        "--rosdistro",
+        rosdistro,
+        "--track",
+        track,
+        "--non-interactive",
+    ]
 
     if new_track:
         cmd.append("--new-track")
