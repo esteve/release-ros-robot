@@ -21,6 +21,7 @@ action = [
     "lark",
     "rosdep",
     "rosinstall-generator",
+    "setuptools",
     "vcs2l",
 ]
 
