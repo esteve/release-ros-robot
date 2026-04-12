@@ -19,9 +19,8 @@ Users familiar with [release-please](https://github.com/googleapis/release-pleas
 1. When you merge PRs to `main`, the action creates/updates a release PR with changelog and version bump
 2. When you merge the release PR, the action automatically runs `bloom-release` for configured ROS distros
 
-For repositories that release multiple tracks into the same release repository,
-prefer the `targets` input shown below so the action can run them sequentially
-inside a single invocation.
+Release mode uses the `targets` input shown below so the action can run all
+branch-matched release targets sequentially inside a single invocation.
 
 ### 1. Create the GitHub workflow
 
@@ -161,8 +160,7 @@ decide whether to proceed. On any other push the job exits immediately.
 2. Creates git tag with version number (idempotent. Skips if tag already exists)
 3. Ensures the PAT owner's `rosdistro` fork exists
 4. Runs `bloom-release` with the explicitly provided repository, release
-   repository, and either one explicit distribution/track pair or the
-   branch-selected entries from `targets`
+   repository, and the branch-selected entries from `targets`
 5. Creates PR(s) to ros/rosdistro
 
 Because the no-op guard is commit-driven rather than tag-driven, a release
@@ -238,10 +236,8 @@ this exclusion, fixture `package.xml` files would be:
 | `oauth-token` | PAT for release mode. Falls back to `BLOOM_OAUTH_TOKEN` env var. Not used in prepare mode. | No | - |
 | `github-user` | GitHub username for bloom fork workflow. Falls back to `BLOOM_GITHUB_USER` env var. Release mode only. | No | - |
 | `repository` | Repository name as registered in rosdistro. Required in release mode. | No | - |
-| `rosdistro` | ROS distribution to release (e.g., `rolling`, `jazzy`). Required in release mode. | No | - |
-| `track` | Bloom track to use (e.g., `rolling`, `jazzy`). Required in release mode. | No | - |
 | `release-repository` | Release repository URL (e.g., `https://github.com/ros2-gbp/my_package-release.git`). Required in release mode. | No | - |
-| `targets` | YAML block string mapping branches to sequential release targets. Release mode accepts either `targets` or the explicit `rosdistro`/`track` pair. | No | - |
+| `targets` | YAML block string mapping branches to sequential release targets. Required in release mode. Each target entry must contain `rosdistro` and `track`. | No | - |
 | `dry-run` | Run without actually releasing | No | `false` |
 | `exclude-paths` | Newline-separated glob patterns to exclude from `package.xml` discovery | No | - |
 | `version-bump` | Version bump type: `auto`, `patch`, `minor`, `major` | No | `auto` |
@@ -254,9 +250,9 @@ this exclusion, fixture `package.xml` files would be:
 | `pr-created` | Whether a release PR was created (`prepare` mode) |
 | `released` | Whether a release was performed (`release` mode) |
 | `version` | The version that was released or will be released |
-| `rosdistro` | The ROS distribution released to (`release` mode) |
-| `pr-url` | URL of the release PR or rosdistro PR |
-| `results-json` | JSON array of per-target release results in batch release mode |
+| `rosdistro` | The ROS distribution released to when exactly one target matched (`release` mode) |
+| `pr-url` | URL of the release PR or rosdistro PR. In release mode this is set when exactly one target matched. |
+| `results-json` | JSON array of per-target release results in release mode |
 
 
 ## Conventional Commits

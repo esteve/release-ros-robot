@@ -640,35 +640,18 @@ def parse_targets_yaml(targets_text: str) -> dict[str, list[Target]]:
 
 def resolve_release_targets(
     current_branch: str,
-    rosdistro: Optional[str],
-    track: Optional[str],
-    targets_text: Optional[str],
+    targets_text: str,
 ) -> list[Target]:
     """Resolve release targets for the current branch.
 
     Args:
         current_branch: Current Git branch name.
-        rosdistro: Explicit single-target rosdistro.
-        track: Explicit single-target track.
-        targets_text: YAML block string for batch release mode.
+        targets_text: YAML block string for release mode.
 
     Returns:
         Ordered list of targets to execute.
     """
-    if targets_text:
-        if rosdistro or track:
-            log_error(
-                "Use either targets or the explicit rosdistro/track inputs, not both"
-            )
-            sys.exit(1)
-
-        return parse_targets_yaml(targets_text).get(current_branch, [])
-
-    if not rosdistro or not track:
-        log_error("release mode requires either targets or both rosdistro and track")
-        sys.exit(1)
-
-    return [{"rosdistro": rosdistro, "track": track}]
+    return parse_targets_yaml(targets_text).get(current_branch, [])
 
 
 def run_single_target_release(
@@ -808,20 +791,13 @@ def parse_args() -> argparse.Namespace:
         help="Repository name as registered in rosdistro (e.g., my_ros_package)",
     )
     parser.add_argument(
-        "--rosdistro",
-        help="ROS distribution to release (e.g., rolling, jazzy, humble)",
-    )
-    parser.add_argument(
-        "--track",
-        help="Bloom track to use (e.g., rolling, jazzy)",
-    )
-    parser.add_argument(
         "--release-repository",
         required=True,
         help="Release repository URL (e.g., https://github.com/ros2-gbp/my_package-release.git)",
     )
     parser.add_argument(
         "--targets",
+        required=True,
         help="YAML block string mapping branches to sequential release targets",
     )
     parser.add_argument(
@@ -850,27 +826,21 @@ def main() -> None:
     )
     targets = resolve_release_targets(
         current_branch=current_branch,
-        rosdistro=args.rosdistro,
-        track=args.track,
         targets_text=args.targets,
     )
 
     log_info(f"Repository: {args.repository}")
     log_info(f"Current branch: {current_branch}")
     log_info(f"Release repository: {args.release_repository}")
-    if args.targets:
-        if targets:
-            log_info(
-                "Matched release targets: "
-                + ", ".join(
-                    f"{target['rosdistro']}/{target['track']}" for target in targets
-                )
+    if targets:
+        log_info(
+            "Matched release targets: "
+            + ", ".join(
+                f"{target['rosdistro']}/{target['track']}" for target in targets
             )
-        else:
-            log_info(f"No release targets configured for branch '{current_branch}'")
+        )
     else:
-        log_info(f"ROS Distribution: {args.rosdistro}")
-        log_info(f"Track: {args.track}")
+        log_info(f"No release targets configured for branch '{current_branch}'")
 
     # Note: Changelog generation is done in prepare_release.py
     # This script only creates git tags and runs bloom-release
@@ -886,8 +856,6 @@ def main() -> None:
         log_info("HEAD is not a release commit, nothing to release")
         set_output("released", "false")
         set_output("version", get_package_version(exclude_paths))
-        if args.rosdistro:
-            set_output("rosdistro", args.rosdistro)
         return
 
     if not targets:

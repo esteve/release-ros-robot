@@ -34,20 +34,9 @@ inputs:
   targets:
     description: >
       YAML block string mapping branch names to sequential release targets.
-      Each target entry must contain rosdistro and track. Release mode accepts
-      either targets or the explicit rosdistro/track pair.
+      Each target entry must contain rosdistro and track. Required in release mode.
     required: false
     default: ''
-  rosdistro:
-    description: >
-      ROS distribution to release (e.g., rolling, jazzy, humble).
-      Required in release mode.
-    required: false
-  track:
-    description: >
-      Bloom track to use (e.g., rolling, jazzy).
-      Required in release mode.
-    required: false
   dry-run:
     description: 'Run in dry-run mode without actually releasing'
     required: false
@@ -184,24 +173,10 @@ runs:
         _missing=""
         [ -z "${{ inputs.repository }}" ]         && _missing="$_missing repository"
         [ -z "${{ inputs.release-repository }}" ]  && _missing="$_missing release-repository"
+        [ -z "${{ inputs.targets }}" ]            && _missing="$_missing targets"
         if [ -n "$_missing" ]; then
           echo "::error::release mode requires the following inputs:$_missing"
           exit 1
-        fi
-
-        if [ -n "${{ inputs.targets }}" ]; then
-          if [ -n "${{ inputs.rosdistro }}" ] || [ -n "${{ inputs.track }}" ]; then
-            echo "::error::release mode accepts either targets or the rosdistro/track inputs, but not both."
-            exit 1
-          fi
-        else
-          _target_missing=""
-          [ -z "${{ inputs.rosdistro }}" ]  && _target_missing="$_target_missing rosdistro"
-          [ -z "${{ inputs.track }}" ]      && _target_missing="$_target_missing track"
-          if [ -n "$_target_missing" ]; then
-            echo "::error::release mode requires either targets or the following inputs:$_target_missing"
-            exit 1
-          fi
         fi
 
     - name: Ensure rosdistro fork exists
@@ -265,13 +240,8 @@ runs:
           --repository "${{ inputs.repository }}"
           --release-repository "${{ inputs.release-repository }}"
           --current-branch "${{ github.ref_name }}"
+          --targets "${INPUT_TARGETS}"
         )
-        if [ -n "${INPUT_TARGETS}" ]; then
-          ARGS+=(--targets "${INPUT_TARGETS}")
-        else
-          ARGS+=(--rosdistro "${{ inputs.rosdistro }}")
-          ARGS+=(--track "${{ inputs.track }}")
-        fi
         if [ "${{ inputs.dry-run }}" = "true" ]; then
           ARGS+=(--dry-run)
         fi

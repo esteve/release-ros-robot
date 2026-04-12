@@ -13,7 +13,7 @@
 #   BLOOM_GITHUB_USER  - GitHub username that owns the PAT. The action ensures
 #                        that this user's rosdistro fork exists before bloom runs.
 #
-# Customize the branches list and the repository/rosdistro/track/release-repository
+# Customize the branches list and the repository/release-repository/targets
 # inputs below to match your package.
 #
 # Running in forks? Add the following to each job to prevent the workflow from

@@ -174,8 +174,6 @@ class TestTargetsYaml:
         """Test target resolution preserves order for the current branch."""
         targets = resolve_release_targets(
             current_branch="main",
-            rosdistro=None,
-            track=None,
             targets_text=(
                 "main:\n"
                 "  - rosdistro: rolling\n"
@@ -197,23 +195,22 @@ class TestTargetsYaml:
         """Test unmatched branches resolve to an empty target list."""
         targets = resolve_release_targets(
             current_branch="other",
-            rosdistro=None,
-            track=None,
             targets_text="main:\n  - rosdistro: rolling\n    track: rolling\n",
         )
 
         assert targets == []
 
-    def test_resolve_release_targets_single_target_mode(self) -> None:
-        """Test explicit rosdistro/track inputs still resolve as one target."""
-        targets = resolve_release_targets(
-            current_branch="main",
-            rosdistro="rolling",
-            track="rolling",
-            targets_text=None,
-        )
+    def test_parse_targets_yaml_rejects_missing_track(self) -> None:
+        """Test targets entries must include a track."""
+        with pytest.raises(SystemExit):
+            parse_targets_yaml("main:\n  - rosdistro: rolling\n")
 
-        assert targets == [{"rosdistro": "rolling", "track": "rolling"}]
+    def test_parse_targets_yaml_rejects_unknown_keys(self) -> None:
+        """Test unknown keys are rejected to catch typos."""
+        with pytest.raises(SystemExit):
+            parse_targets_yaml(
+                "main:\n  - rosdistro: rolling\n    track: rolling\n    foo: bar\n"
+            )
 
 
 class TestReleaseRepoVerification:
@@ -869,8 +866,6 @@ class TestMainTargetsMode:
         mock_parse_args.return_value = MagicMock(
             repository="test_package",
             release_repository="https://github.com/ros2-gbp/test_package-release.git",
-            rosdistro=None,
-            track=None,
             targets=(
                 "main:\n"
                 "  - rosdistro: rolling\n"
@@ -924,8 +919,6 @@ class TestMainTargetsMode:
         mock_parse_args.return_value = MagicMock(
             repository="test_package",
             release_repository="https://github.com/ros2-gbp/test_package-release.git",
-            rosdistro=None,
-            track=None,
             targets="main:\n  - rosdistro: rolling\n    track: rolling\n",
             current_branch="jazzy",
             dry_run=False,
@@ -965,8 +958,6 @@ class TestMainTargetsMode:
         mock_parse_args.return_value = MagicMock(
             repository="test_package",
             release_repository="https://github.com/ros2-gbp/test_package-release.git",
-            rosdistro=None,
-            track=None,
             targets=(
                 "main:\n"
                 "  - rosdistro: rolling\n"
