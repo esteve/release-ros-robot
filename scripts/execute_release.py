@@ -16,6 +16,7 @@ import sys
 from typing import Optional
 
 from common import (
+    discover_package_xmls,
     get_exclude_paths_from_env,
     get_package_version,
     is_release_commit,
@@ -191,6 +192,35 @@ def ensure_release_tag(tag: str) -> bool:
     return True
 
 
+def get_package_names(exclude_patterns: list[str]) -> list[str]:
+    """Return sorted package names from non-excluded package.xml files.
+
+    Args:
+        exclude_patterns: Glob patterns to exclude from package.xml discovery.
+
+    Returns:
+        Sorted unique package names declared in package.xml files.
+    """
+    package_xmls = discover_package_xmls(exclude_patterns)
+    if not package_xmls:
+        log_error("No package.xml found")
+        sys.exit(1)
+
+    package_names: set[str] = set()
+    for pkg_xml in package_xmls:
+        with open(pkg_xml) as f:
+            content = f.read()
+
+        match = re.search(r"<name>([^<]+)</name>", content)
+        if match is None:
+            log_error(f"Could not determine package name from {pkg_xml}")
+            sys.exit(1)
+
+        package_names.add(match.group(1))
+
+    return sorted(package_names)
+
+
 def is_release_repo_push_conflict(output: str) -> bool:
     """Return True if bloom failed on a release-repository push race.
 
@@ -221,6 +251,61 @@ def extract_rosdistro_pr_url(output: str) -> Optional[str]:
     if pr_match:
         return pr_match.group(1)
     return None
+
+
+def release_repo_has_expected_release_tags(
+    release_repo: str,
+    track: str,
+    version: str,
+    package_names: list[str],
+) -> bool:
+    """Return True if the remote release repo already has the track release tags.
+
+    Args:
+        release_repo: Release repository URL.
+        track: Bloom track being released.
+        version: Package version being released.
+        package_names: Package names expected to have release tags.
+
+    Returns:
+        True if every package has a matching ``release/<track>/<package>/<version>-*``
+        tag in the remote release repository, False otherwise.
+    """
+    try:
+        result = run_command(
+            ["git", "ls-remote", "--tags", release_repo],
+            capture_output=True,
+            check=False,
+        )
+    except OSError:
+        return False
+
+    if result.returncode != 0:
+        return False
+
+    refs = set()
+    for line in result.stdout.splitlines():
+        parts = line.split()
+        if len(parts) != 2:
+            continue
+
+        ref = parts[1]
+        if ref.endswith("^{}"):
+            ref = ref[:-3]
+        refs.add(ref)
+
+    missing_prefixes: list[str] = []
+    for package_name in package_names:
+        prefix = f"refs/tags/release/{track}/{package_name}/{version}-"
+        if not any(ref.startswith(prefix) for ref in refs):
+            missing_prefixes.append(prefix)
+
+    if missing_prefixes:
+        for prefix in missing_prefixes:
+            log_warning(f"Missing remote release tag matching: {prefix}*")
+        return False
+
+    return True
 
 
 def run_bloom_command(
@@ -284,6 +369,8 @@ def run_bloom_release(
     rosdistro: str,
     track: str,
     release_repo: str,
+    version: Optional[str] = None,
+    package_names: Optional[list[str]] = None,
     dry_run: bool = False,
     new_track: bool = False,
 ) -> Optional[str]:
@@ -294,6 +381,8 @@ def run_bloom_release(
         rosdistro: ROS distribution to release.
         track: Bloom track to use.
         release_repo: Release repository URL.
+        version: Package version being released.
+        package_names: Package names expected to have release tags.
         dry_run: Run bloom in dry-run mode.
         new_track: Create the bloom track before releasing.
 
@@ -315,9 +404,29 @@ def run_bloom_release(
     except subprocess.CalledProcessError as e:
         output = (e.stdout or "") + (e.stderr or "")
         if is_release_repo_push_conflict(output):
+            if version is None or not package_names:
+                log_error(
+                    "bloom-release release-repository push raced with another "
+                    "job, but the expected release tags could not be verified"
+                )
+                return None
+
+            if not release_repo_has_expected_release_tags(
+                release_repo=release_repo,
+                track=track,
+                version=version,
+                package_names=package_names,
+            ):
+                log_error(
+                    "bloom-release release-repository push raced with another "
+                    "job, but the expected remote release tags were not found"
+                )
+                return None
+
             log_warning(
-                "bloom-release release-repository push raced with another job; "
-                "continuing to pull-request creation"
+                "bloom-release release-repository push raced with another job, "
+                "and the expected remote release tags already exist; continuing "
+                "to pull-request creation"
             )
         else:
             log_error(f"bloom-release failed: {e}")
@@ -498,6 +607,7 @@ def main() -> None:
 
     # Get the version from package.xml (already set by prepare_release.py)
     version = get_package_version(exclude_paths)
+    package_names = get_package_names(exclude_paths)
     log_info(f"Releasing version: {version}")
 
     # Optimistic tag creation: in a parallel matrix another job may create the
@@ -538,6 +648,8 @@ def main() -> None:
         rosdistro=args.rosdistro,
         track=args.track,
         release_repo=args.release_repository,
+        version=version,
+        package_names=package_names,
         dry_run=args.dry_run,
         new_track=new_track,
     )
