@@ -165,6 +165,32 @@ class TestRunBloomRelease:
         )
         assert found_new_track
 
+    @patch("execute_release.log_error")
+    @patch("execute_release.run_command")
+    def test_run_bloom_release_logs_stdout_stderr_on_failure(
+        self, mock_run, mock_log_error
+    ):
+        """Test that bloom stdout and stderr are logged when bloom-release fails."""
+        mock_run.side_effect = subprocess.CalledProcessError(
+            1,
+            ["bloom-release", "--rosdistro", "rolling", "test_package"],
+            output="bloom stdout details",
+            stderr="bloom stderr details",
+        )
+
+        result = run_bloom_release(
+            repo_name="test_package",
+            rosdistro="rolling",
+            track="rolling",
+            release_repo="https://github.com/ros2-gbp/test_package-release.git",
+        )
+
+        assert result is None
+        logged_messages = [call.args[0] for call in mock_log_error.call_args_list]
+        assert any("bloom-release failed:" in msg for msg in logged_messages)
+        assert any("bloom stdout details" in msg for msg in logged_messages)
+        assert any("bloom stderr details" in msg for msg in logged_messages)
+
 
 class TestIntegration:
     """Integration tests for execute_release.py."""

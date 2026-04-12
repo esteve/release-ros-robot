@@ -77,8 +77,18 @@ def run_bloom_release(
         if pr_match:
             return pr_match.group(1)
 
+        log_error("bloom-release completed without producing a rosdistro PR URL")
+        if result.stdout:
+            log_error(f"bloom-release stdout:\n{result.stdout}")
+        if result.stderr:
+            log_error(f"bloom-release stderr:\n{result.stderr}")
+
     except subprocess.CalledProcessError as e:
         log_error(f"bloom-release failed: {e}")
+        if e.stdout:
+            log_error(f"bloom-release stdout:\n{e.stdout}")
+        if e.stderr:
+            log_error(f"bloom-release stderr:\n{e.stderr}")
         return None
 
     return None
