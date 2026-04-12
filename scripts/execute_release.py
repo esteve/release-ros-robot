@@ -20,14 +20,18 @@ from typing import Optional
 import yaml
 
 from common import (
+    DEFAULT_CONFIG_FILE,
     discover_package_xmls,
-    get_exclude_paths_from_env,
+    get_config_string,
+    get_config_value,
     get_package_version,
     is_release_commit,
+    load_config_file,
     log_error,
     log_info,
     log_success,
     log_warning,
+    resolve_exclude_paths,
     run_command,
     set_output,
 )
@@ -582,11 +586,23 @@ def parse_targets_yaml(targets_text: str) -> dict[str, list[Target]]:
         log_error(f"Failed to parse targets YAML: {error}")
         sys.exit(1)
 
+    return validate_targets_mapping(parsed)
+
+
+def validate_targets_mapping(parsed: object) -> dict[str, list[Target]]:
+    """Validate branch-mapped release targets from YAML or TOML data.
+
+    Args:
+        parsed: Parsed branch-to-target structure.
+
+    Returns:
+        Mapping of branch name to ordered list of release targets.
+    """
+    branch_targets: dict[str, list[Target]] = {}
     if not isinstance(parsed, dict):
         log_error("targets must parse to a mapping of branches to target lists")
         sys.exit(1)
 
-    branch_targets: dict[str, list[Target]] = {}
     for branch, targets in parsed.items():
         if not isinstance(branch, str) or not branch.strip():
             log_error("targets keys must be non-empty branch names")
@@ -638,20 +654,69 @@ def parse_targets_yaml(targets_text: str) -> dict[str, list[Target]]:
     return branch_targets
 
 
+def resolve_release_settings(
+    config: dict[str, object],
+    repository_override: Optional[str],
+    release_repository_override: Optional[str],
+    targets_override: Optional[str],
+) -> tuple[str, str, dict[str, list[Target]]]:
+    """Resolve release settings from action inputs over config file values.
+
+    Args:
+        config: Parsed TOML config mapping.
+        repository_override: Direct repository input.
+        release_repository_override: Direct release repository input.
+        targets_override: Direct YAML targets input.
+
+    Returns:
+        Tuple of resolved repository, release repository, and validated targets.
+    """
+    repository = repository_override or get_config_string(
+        config, "repository", field_name="repository"
+    )
+    release_repository = release_repository_override or get_config_string(
+        config, "release_repository", field_name="release_repository"
+    )
+
+    config_targets = get_config_value(config, "release", "targets")
+    if targets_override:
+        targets = parse_targets_yaml(targets_override)
+    else:
+        if config_targets is None:
+            log_error(
+                "release mode requires targets via the action input or the config file"
+            )
+            sys.exit(1)
+        targets = validate_targets_mapping(config_targets)
+
+    if not repository:
+        log_error(
+            "release mode requires repository via the action input or the config file"
+        )
+        sys.exit(1)
+    if not release_repository:
+        log_error(
+            "release mode requires release_repository via the action input or the config file"
+        )
+        sys.exit(1)
+
+    return repository, release_repository, targets
+
+
 def resolve_release_targets(
     current_branch: str,
-    targets_text: str,
+    targets: dict[str, list[Target]],
 ) -> list[Target]:
     """Resolve release targets for the current branch.
 
     Args:
         current_branch: Current Git branch name.
-        targets_text: YAML block string for release mode.
+        targets: Validated branch-to-target mapping.
 
     Returns:
         Ordered list of targets to execute.
     """
-    return parse_targets_yaml(targets_text).get(current_branch, [])
+    return targets.get(current_branch, [])
 
 
 def run_single_target_release(
@@ -786,18 +851,20 @@ def parse_args() -> argparse.Namespace:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
+        "--config-file",
+        default=DEFAULT_CONFIG_FILE,
+        help="Path to the TOML configuration file",
+    )
+    parser.add_argument(
         "--repository",
-        required=True,
         help="Repository name as registered in rosdistro (e.g., my_ros_package)",
     )
     parser.add_argument(
         "--release-repository",
-        required=True,
         help="Release repository URL (e.g., https://github.com/ros2-gbp/my_package-release.git)",
     )
     parser.add_argument(
         "--targets",
-        required=True,
         help="YAML block string mapping branches to sequential release targets",
     )
     parser.add_argument(
@@ -817,21 +884,28 @@ def main() -> None:
     """Main entry point."""
     args = parse_args()
 
-    exclude_paths = get_exclude_paths_from_env()
+    config = load_config_file(args.config_file)
+    exclude_paths = resolve_exclude_paths(config)
     current_branch = (
         args.current_branch
         or run_command(
             ["git", "rev-parse", "--abbrev-ref", "HEAD"], capture_output=True
         ).stdout.strip()
     )
+    repository, release_repository, all_targets = resolve_release_settings(
+        config=config,
+        repository_override=args.repository,
+        release_repository_override=args.release_repository,
+        targets_override=args.targets,
+    )
     targets = resolve_release_targets(
         current_branch=current_branch,
-        targets_text=args.targets,
+        targets=all_targets,
     )
 
-    log_info(f"Repository: {args.repository}")
+    log_info(f"Repository: {repository}")
     log_info(f"Current branch: {current_branch}")
-    log_info(f"Release repository: {args.release_repository}")
+    log_info(f"Release repository: {release_repository}")
     if targets:
         log_info(
             "Matched release targets: "
@@ -892,10 +966,10 @@ def main() -> None:
         rosdistro = target["rosdistro"]
         track = target["track"]
         pr_url = run_single_target_release(
-            repo_name=args.repository,
+            repo_name=repository,
             rosdistro=rosdistro,
             track=track,
-            release_repo=args.release_repository,
+            release_repo=release_repository,
             version=version,
             package_names=package_names,
             dry_run=args.dry_run,

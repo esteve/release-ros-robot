@@ -24,19 +24,24 @@ inputs:
   repository:
     description: >
       Repository name as registered in rosdistro (e.g., my_ros_package).
-      Required in release mode.
+      Overrides the config file in release mode.
     required: false
   release-repository:
     description: >
       Release repository URL (e.g., https://github.com/ros2-gbp/my_package-release.git).
-      Required in release mode.
+      Overrides the config file in release mode.
     required: false
   targets:
     description: >
       YAML block string mapping branch names to sequential release targets.
-      Each target entry must contain rosdistro and track. Required in release mode.
+      Each target entry must contain rosdistro and track. Overrides the config file in release mode.
     required: false
     default: ''
+  config-file:
+    description: >
+      TOML config file path. Defaults to .github/bloom-release.toml. Direct action inputs override config values.
+    required: false
+    default: '.github/bloom-release.toml'
   dry-run:
     description: 'Run in dry-run mode without actually releasing'
     required: false
@@ -51,11 +56,11 @@ inputs:
   version-bump:
     description: 'Version bump type: auto (detect from conventional commits), patch, minor, or major'
     required: false
-    default: 'auto'
+    default: ''
   base-branch:
     description: 'Base branch for release PR (only used in prepare mode)'
     required: false
-    default: 'main'
+    default: ''
 
 outputs:
   pr-created:
@@ -170,14 +175,8 @@ runs:
       if: inputs.mode == 'release'
       shell: bash
       run: |
-        _missing=""
-        [ -z "${{ inputs.repository }}" ]         && _missing="$_missing repository"
-        [ -z "${{ inputs.release-repository }}" ]  && _missing="$_missing release-repository"
-        [ -z "${{ inputs.targets }}" ]            && _missing="$_missing targets"
-        if [ -n "$_missing" ]; then
-          echo "::error::release mode requires the following inputs:$_missing"
-          exit 1
-        fi
+        # Validation happens inside the Python entry points after config + input merge.
+        true
 
     - name: Ensure rosdistro fork exists
       if: inputs.mode == 'release'
@@ -221,10 +220,15 @@ runs:
         BLOOM_EXCLUDE_PATHS: ${{ inputs.exclude-paths }}
       run: |
         export GH_TOKEN="${GITHUB_TOKEN}"
+        ARGS=(--config-file "${{ inputs.config-file }}")
+        if [ -n "${{ inputs.version-bump }}" ]; then
+          ARGS+=(--version-bump "${{ inputs.version-bump }}")
+        fi
+        if [ -n "${{ inputs.base-branch }}" ]; then
+          ARGS+=(--base-branch "${{ inputs.base-branch }}")
+        fi
         pixi run --manifest-path "${{ github.action_path }}" \
-          python "${{ github.action_path }}/scripts/prepare_release.py" \
-          --version-bump "${{ inputs.version-bump }}" \
-          --base-branch "${{ inputs.base-branch }}"
+          python "${{ github.action_path }}/scripts/prepare_release.py" "${ARGS[@]}"
 
     - name: Run Bloom Release
       if: inputs.mode == 'release'
@@ -237,6 +241,7 @@ runs:
       run: |
         export GH_TOKEN="${BLOOM_OAUTH_TOKEN:-${INPUT_OAUTH_TOKEN:-}}"
         ARGS=(
+          --config-file "${{ inputs.config-file }}"
           --repository "${{ inputs.repository }}"
           --release-repository "${{ inputs.release-repository }}"
           --current-branch "${{ github.ref_name }}"

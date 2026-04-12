@@ -13,8 +13,8 @@
 #   BLOOM_GITHUB_USER  - GitHub username that owns the PAT. The action ensures
 #                        that this user's rosdistro fork exists before bloom runs.
 #
-# Customize the branches list and the repository/release-repository/targets
-# inputs below to match your package.
+# Customize the branches list and the .github/bloom-release.toml contents below
+# to match your package. Action inputs override the config file when needed.
 #
 # Running in forks? Add the following to each job to prevent the workflow from
 # running (and failing) in forks, same pattern as the release-plz quickstart:
@@ -52,18 +52,6 @@ jobs:
         uses: esteve/release-ros-robot@v1
         with:
           mode: release
-          repository: my_ros_package
-          release-repository: https://github.com/ros2-gbp/my_ros_package-release.git
-          targets: |
-            main:
-              - rosdistro: rolling
-                track: rolling
-            jazzy:
-              - rosdistro: jazzy
-                track: jazzy
-            humble:
-              - rosdistro: humble
-                track: humble
 
   # Runs on every push. Self-skips when the push came from merging a release PR.
   # The concurrency block ensures only one instance runs at a time per branch.
@@ -87,6 +75,25 @@ jobs:
         uses: esteve/release-ros-robot@v1
         with:
           mode: prepare
-          base-branch: ${{ github.ref_name }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+# Add this file to .github/bloom-release.toml in the consumer repository:
+#
+# repository = "my_ros_package"
+# release_repository = "https://github.com/ros2-gbp/my_ros_package-release.git"
+#
+# [prepare]
+# base_branch = "main"
+# version_bump = "auto"
+#
+# [release.targets]
+# main = [
+#   { rosdistro = "rolling", track = "rolling" },
+# ]
+# jazzy = [
+#   { rosdistro = "jazzy", track = "jazzy" },
+# ]
+# humble = [
+#   { rosdistro = "humble", track = "humble" },
+# ]

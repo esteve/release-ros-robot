@@ -24,6 +24,7 @@ from execute_release import (
     parse_remote_tag_target,
     parse_track_list,
     release_repo_has_expected_release_tags,
+    resolve_release_settings,
     resolve_release_targets,
     run_single_target_release,
     run_bloom_release,
@@ -174,16 +175,13 @@ class TestTargetsYaml:
         """Test target resolution preserves order for the current branch."""
         targets = resolve_release_targets(
             current_branch="main",
-            targets_text=(
-                "main:\n"
-                "  - rosdistro: rolling\n"
-                "    track: rolling\n"
-                "  - rosdistro: jazzy\n"
-                "    track: jazzy\n"
-                "humble:\n"
-                "  - rosdistro: humble\n"
-                "    track: humble\n"
-            ),
+            targets={
+                "main": [
+                    {"rosdistro": "rolling", "track": "rolling"},
+                    {"rosdistro": "jazzy", "track": "jazzy"},
+                ],
+                "humble": [{"rosdistro": "humble", "track": "humble"}],
+            },
         )
 
         assert targets == [
@@ -195,7 +193,7 @@ class TestTargetsYaml:
         """Test unmatched branches resolve to an empty target list."""
         targets = resolve_release_targets(
             current_branch="other",
-            targets_text="main:\n  - rosdistro: rolling\n    track: rolling\n",
+            targets={"main": [{"rosdistro": "rolling", "track": "rolling"}]},
         )
 
         assert targets == []
@@ -211,6 +209,50 @@ class TestTargetsYaml:
             parse_targets_yaml(
                 "main:\n  - rosdistro: rolling\n    track: rolling\n    foo: bar\n"
             )
+
+
+class TestReleaseConfigResolution:
+    """Tests for release config fallback and overrides."""
+
+    def test_release_settings_use_config_defaults(self) -> None:
+        """Test release settings fall back to TOML config values."""
+        repository, release_repository, targets = resolve_release_settings(
+            config={
+                "repository": "configured_pkg",
+                "release_repository": "https://github.com/ros2-gbp/configured-release.git",
+                "release": {
+                    "targets": {"main": [{"rosdistro": "rolling", "track": "rolling"}]}
+                },
+            },
+            repository_override=None,
+            release_repository_override=None,
+            targets_override=None,
+        )
+
+        assert repository == "configured_pkg"
+        assert (
+            release_repository == "https://github.com/ros2-gbp/configured-release.git"
+        )
+        assert targets == {"main": [{"rosdistro": "rolling", "track": "rolling"}]}
+
+    def test_release_settings_inputs_override_config(self) -> None:
+        """Test direct release inputs override config values."""
+        repository, release_repository, targets = resolve_release_settings(
+            config={
+                "repository": "configured_pkg",
+                "release_repository": "https://github.com/ros2-gbp/configured-release.git",
+                "release": {
+                    "targets": {"main": [{"rosdistro": "rolling", "track": "rolling"}]}
+                },
+            },
+            repository_override="input_pkg",
+            release_repository_override="https://github.com/ros2-gbp/input-release.git",
+            targets_override="main:\n  - rosdistro: jazzy\n    track: jazzy\n",
+        )
+
+        assert repository == "input_pkg"
+        assert release_repository == "https://github.com/ros2-gbp/input-release.git"
+        assert targets == {"main": [{"rosdistro": "jazzy", "track": "jazzy"}]}
 
 
 class TestReleaseRepoVerification:
@@ -849,12 +891,14 @@ class TestMainTargetsMode:
     @patch("execute_release.get_package_names")
     @patch("execute_release.get_package_version")
     @patch("execute_release.is_release_commit")
-    @patch("execute_release.get_exclude_paths_from_env")
+    @patch("execute_release.resolve_exclude_paths")
+    @patch("execute_release.load_config_file")
     @patch("execute_release.parse_args")
     def test_main_runs_targets_sequentially(
         self,
         mock_parse_args,
-        mock_get_exclude_paths,
+        mock_load_config_file,
+        mock_resolve_exclude_paths,
         mock_is_release_commit,
         mock_get_package_version,
         mock_get_package_names,
@@ -864,6 +908,7 @@ class TestMainTargetsMode:
     ) -> None:
         """Test batch mode runs matching targets in declared order."""
         mock_parse_args.return_value = MagicMock(
+            config_file=".github/bloom-release.toml",
             repository="test_package",
             release_repository="https://github.com/ros2-gbp/test_package-release.git",
             targets=(
@@ -876,7 +921,8 @@ class TestMainTargetsMode:
             current_branch="main",
             dry_run=False,
         )
-        mock_get_exclude_paths.return_value = []
+        mock_load_config_file.return_value = {}
+        mock_resolve_exclude_paths.return_value = []
         mock_is_release_commit.return_value = True
         mock_get_package_version.return_value = "1.2.3"
         mock_get_package_names.return_value = ["test_package"]
@@ -904,12 +950,14 @@ class TestMainTargetsMode:
     @patch("execute_release.get_package_names")
     @patch("execute_release.get_package_version")
     @patch("execute_release.is_release_commit")
-    @patch("execute_release.get_exclude_paths_from_env")
+    @patch("execute_release.resolve_exclude_paths")
+    @patch("execute_release.load_config_file")
     @patch("execute_release.parse_args")
     def test_main_no_matching_targets_is_no_op(
         self,
         mock_parse_args,
-        mock_get_exclude_paths,
+        mock_load_config_file,
+        mock_resolve_exclude_paths,
         mock_is_release_commit,
         mock_get_package_version,
         mock_get_package_names,
@@ -917,13 +965,15 @@ class TestMainTargetsMode:
     ) -> None:
         """Test batch mode no-ops cleanly when no targets match the branch."""
         mock_parse_args.return_value = MagicMock(
+            config_file=".github/bloom-release.toml",
             repository="test_package",
             release_repository="https://github.com/ros2-gbp/test_package-release.git",
             targets="main:\n  - rosdistro: rolling\n    track: rolling\n",
             current_branch="jazzy",
             dry_run=False,
         )
-        mock_get_exclude_paths.return_value = []
+        mock_load_config_file.return_value = {}
+        mock_resolve_exclude_paths.return_value = []
         mock_is_release_commit.return_value = True
         mock_get_package_version.return_value = "1.2.3"
         mock_get_package_names.return_value = ["test_package"]
@@ -941,12 +991,72 @@ class TestMainTargetsMode:
     @patch("execute_release.get_package_names")
     @patch("execute_release.get_package_version")
     @patch("execute_release.is_release_commit")
-    @patch("execute_release.get_exclude_paths_from_env")
+    @patch("execute_release.resolve_exclude_paths")
+    @patch("execute_release.load_config_file")
+    @patch("execute_release.parse_args")
+    def test_main_uses_release_config_defaults(
+        self,
+        mock_parse_args,
+        mock_load_config_file,
+        mock_resolve_exclude_paths,
+        mock_is_release_commit,
+        mock_get_package_version,
+        mock_get_package_names,
+        mock_ensure_release_tag,
+        mock_run_single_target_release,
+        mock_set_output,
+    ) -> None:
+        """Test release mode falls back to config file values."""
+        mock_parse_args.return_value = MagicMock(
+            config_file=".github/bloom-release.toml",
+            repository="",
+            release_repository="",
+            targets="",
+            current_branch="main",
+            dry_run=False,
+        )
+        mock_load_config_file.return_value = {
+            "repository": "configured_pkg",
+            "release_repository": "https://github.com/ros2-gbp/configured-release.git",
+            "release": {
+                "targets": {"main": [{"rosdistro": "rolling", "track": "rolling"}]}
+            },
+        }
+        mock_resolve_exclude_paths.return_value = []
+        mock_is_release_commit.return_value = True
+        mock_get_package_version.return_value = "1.2.3"
+        mock_get_package_names.return_value = ["configured_pkg"]
+        mock_ensure_release_tag.return_value = True
+        mock_run_single_target_release.return_value = (
+            "https://github.com/ros/rosdistro/pull/123"
+        )
+
+        from execute_release import main
+
+        main()
+
+        kwargs = mock_run_single_target_release.call_args.kwargs
+        assert kwargs["repo_name"] == "configured_pkg"
+        assert (
+            kwargs["release_repo"]
+            == "https://github.com/ros2-gbp/configured-release.git"
+        )
+        mock_set_output.assert_any_call("released", "true")
+
+    @patch("execute_release.set_output")
+    @patch("execute_release.run_single_target_release")
+    @patch("execute_release.ensure_release_tag")
+    @patch("execute_release.get_package_names")
+    @patch("execute_release.get_package_version")
+    @patch("execute_release.is_release_commit")
+    @patch("execute_release.resolve_exclude_paths")
+    @patch("execute_release.load_config_file")
     @patch("execute_release.parse_args")
     def test_main_batch_mode_fails_fast(
         self,
         mock_parse_args,
-        mock_get_exclude_paths,
+        mock_load_config_file,
+        mock_resolve_exclude_paths,
         mock_is_release_commit,
         mock_get_package_version,
         mock_get_package_names,
@@ -956,6 +1066,7 @@ class TestMainTargetsMode:
     ) -> None:
         """Test batch mode stops on the first failed target."""
         mock_parse_args.return_value = MagicMock(
+            config_file=".github/bloom-release.toml",
             repository="test_package",
             release_repository="https://github.com/ros2-gbp/test_package-release.git",
             targets=(
@@ -968,7 +1079,8 @@ class TestMainTargetsMode:
             current_branch="main",
             dry_run=False,
         )
-        mock_get_exclude_paths.return_value = []
+        mock_load_config_file.return_value = {}
+        mock_resolve_exclude_paths.return_value = []
         mock_is_release_commit.return_value = True
         mock_get_package_version.return_value = "1.2.3"
         mock_get_package_names.return_value = ["test_package"]

@@ -8,19 +8,19 @@ A GitHub Action to automate ROS package releases using `bloom-release`. It follo
 - Conventional Commits: Auto-detects version bump type from commit messages
 - Automatic changelog generation in catkin CHANGELOG.rst format
 - Automatic version bumping in package.xml files
-- Multi-distro support via explicit workflow inputs
+- Multi-distro support via repository TOML config with action-level overrides
 - Automatic PR creation to [rosdistro](https://github.com/ros/rosdistro)
 - Support for both first-time and subsequent releases
 
 ## Quick Start
 
-Users familiar with [release-please](https://github.com/googleapis/release-please) or [release-plz](https://release-plz.dev/) will recognize the same PR-driven release workflow. Consumers only need a workflow file, no configuration files in the repository.
+Users familiar with [release-please](https://github.com/googleapis/release-please) or [release-plz](https://release-plz.dev/) will recognize the same PR-driven release workflow. Consumers usually add a workflow file plus a default `.github/bloom-release.toml` config.
 
 1. When you merge PRs to `main`, the action creates/updates a release PR with changelog and version bump
 2. When you merge the release PR, the action automatically runs `bloom-release` for configured ROS distros
 
-Release mode uses the `targets` input shown below so the action can run all
-branch-matched release targets sequentially inside a single invocation.
+Release mode uses branch-matched `targets` from `.github/bloom-release.toml` by
+default, and direct action inputs override the config file when needed.
 
 ### 1. Create the GitHub workflow
 
@@ -57,18 +57,6 @@ jobs:
         uses: esteve/release-ros-robot@v1
         with:
           mode: release
-          repository: my_ros_package
-          release-repository: https://github.com/ros2-gbp/my_ros_package-release.git
-          targets: |
-            main:
-              - rosdistro: rolling
-                track: rolling
-            jazzy:
-              - rosdistro: jazzy
-                track: jazzy
-            humble:
-              - rosdistro: humble
-                track: humble
 
   # Runs on every push. Self-skips when the push came from merging a release PR.
   # The concurrency block ensures only one instance runs at a time per branch.
@@ -98,8 +86,46 @@ jobs:
 ```
 
 Keep release runs sequential when multiple tracks share the same release
-repository. The `targets` input does that inside one action invocation. If you
+repository. The configured `targets` do that inside one action invocation. If you
 switch back to a matrix, set `strategy.max-parallel: 1`.
+
+Create `.github/bloom-release.toml`:
+
+```toml
+repository = "my_ros_package"
+release_repository = "https://github.com/ros2-gbp/my_ros_package-release.git"
+
+[prepare]
+base_branch = "main"
+version_bump = "auto"
+
+[release.targets]
+main = [
+  { rosdistro = "rolling", track = "rolling" },
+]
+jazzy = [
+  { rosdistro = "jazzy", track = "jazzy" },
+]
+humble = [
+  { rosdistro = "humble", track = "humble" },
+]
+```
+
+If you need a one-off override from the workflow, direct action inputs win over
+the config file. For example:
+
+```yaml
+      - name: Run bloom-release targets
+        uses: esteve/release-ros-robot@v1
+        with:
+          mode: release
+          targets: |
+            main:
+              - rosdistro: rolling
+                track: rolling
+              - rosdistro: jazzy
+                track: jazzy
+```
 
 > Running in forks? Add `if: ${{ github.repository_owner == 'YOUR_ORG' }}` to
 > each job to prevent the workflow from running (and failing) in forks. This is
@@ -159,15 +185,15 @@ decide whether to proceed. On any other push the job exits immediately.
 1. Reads version from `package.xml` (already updated by prepare mode)
 2. Creates git tag with version number (idempotent. Skips if tag already exists)
 3. Ensures the PAT owner's `rosdistro` fork exists
-4. Runs `bloom-release` with the explicitly provided repository, release
-   repository, and the branch-selected entries from `targets`
+4. Runs `bloom-release` with repository, release repository, and the
+   branch-selected entries from config or action input overrides
 5. Creates PR(s) to ros/rosdistro
 
 Because the no-op guard is commit-driven rather than tag-driven, a release
 commit can safely fan out into multiple sequential targets. The source tag is
 created once, but bloom still mutates shared state in the release repository,
 so shared release repositories should be processed sequentially. Prefer the
-`targets` input for this; if you use a matrix instead, set
+default config-driven `targets` for this; if you use a matrix instead, set
 `strategy.max-parallel: 1`.
 
 ### Multi-Package Repositories
@@ -235,9 +261,10 @@ this exclusion, fixture `package.xml` files would be:
 | `mode` | Action mode: `prepare` or `release` | No | `release` |
 | `oauth-token` | PAT for release mode. Falls back to `BLOOM_OAUTH_TOKEN` env var. Not used in prepare mode. | No | - |
 | `github-user` | GitHub username for bloom fork workflow. Falls back to `BLOOM_GITHUB_USER` env var. Release mode only. | No | - |
-| `repository` | Repository name as registered in rosdistro. Required in release mode. | No | - |
-| `release-repository` | Release repository URL (e.g., `https://github.com/ros2-gbp/my_package-release.git`). Required in release mode. | No | - |
-| `targets` | YAML block string mapping branches to sequential release targets. Required in release mode. Each target entry must contain `rosdistro` and `track`. | No | - |
+| `repository` | Repository name as registered in rosdistro. Overrides the config file in release mode. | No | - |
+| `release-repository` | Release repository URL (e.g., `https://github.com/ros2-gbp/my_package-release.git`). Overrides the config file in release mode. | No | - |
+| `targets` | YAML block string mapping branches to sequential release targets. Overrides the config file in release mode. Each target entry must contain `rosdistro` and `track`. | No | - |
+| `config-file` | TOML config file path. Defaults to `.github/bloom-release.toml`. Direct action inputs override config values. | No | `.github/bloom-release.toml` |
 | `dry-run` | Run without actually releasing | No | `false` |
 | `exclude-paths` | Newline-separated glob patterns to exclude from `package.xml` discovery | No | - |
 | `version-bump` | Version bump type: `auto`, `patch`, `minor`, `major` | No | `auto` |
@@ -316,8 +343,8 @@ Caused by a shallow git clone. Both modes need full history.
 
 ### Release step does nothing for a branch
 
-Each release step needs explicit `repository`, `rosdistro`, `track`, and
-`release-repository` inputs. The action will fail fast if any are missing.
+Ensure the current branch is present in `release.targets` inside the config
+file, or pass a direct `targets` override to the action.
 
 ### "Failed to push to rosdistro fork" / "fork not found"
 

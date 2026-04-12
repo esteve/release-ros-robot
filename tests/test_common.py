@@ -11,7 +11,9 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
 from common import (
+    DEFAULT_CONFIG_FILE,
     discover_package_xmls,
+    load_config_file,
     get_last_tag,
     get_package_version,
 )
@@ -230,3 +232,36 @@ class TestDiscoverPackageXmls:
         result_single = discover_package_xmls(["test/*"])
         assert result_double == []
         assert result_single == []
+
+
+class TestConfigLoading:
+    """Tests for TOML config loading helpers."""
+
+    def test_load_default_config_missing_returns_empty(self, temp_dir: Path) -> None:
+        """Test the default missing config file is treated as optional."""
+        os.chdir(temp_dir)
+
+        config = load_config_file(DEFAULT_CONFIG_FILE)
+
+        assert config == {}
+
+    def test_load_explicit_missing_config_fails(self, temp_dir: Path) -> None:
+        """Test an explicitly requested missing config file fails."""
+        os.chdir(temp_dir)
+
+        with pytest.raises(SystemExit):
+            load_config_file("custom.toml")
+
+    def test_load_config_file(self, temp_dir: Path) -> None:
+        """Test TOML config files are loaded successfully."""
+        os.chdir(temp_dir)
+        config_dir = temp_dir / ".github"
+        config_dir.mkdir()
+        (config_dir / "bloom-release.toml").write_text(
+            'repository = "pkg"\n[prepare]\nbase_branch = "jazzy"\n'
+        )
+
+        config = load_config_file(DEFAULT_CONFIG_FILE)
+
+        assert config["repository"] == "pkg"
+        assert config["prepare"]["base_branch"] == "jazzy"

@@ -958,3 +958,122 @@ class TestIsReleaseCommit:
         os.chdir(temp_git_repo)
         self._make_repo_with_commit(temp_git_repo, "chore: update dependencies")
         assert is_release_commit() is False
+
+
+class TestPrepareConfig:
+    """Tests for prepare-mode config fallback and overrides."""
+
+    @patch("prepare_release.set_output")
+    @patch("prepare_release.create_or_update_release_pr")
+    @patch("prepare_release.calculate_next_version")
+    @patch("prepare_release.detect_version_bump_from_commits")
+    @patch("prepare_release.get_commits_since_ref")
+    @patch("prepare_release.get_last_release_commit")
+    @patch("prepare_release.get_last_tag")
+    @patch("prepare_release.get_package_version")
+    @patch("prepare_release.is_release_commit")
+    @patch("prepare_release.parse_args")
+    def test_prepare_uses_config_defaults(
+        self,
+        mock_parse_args,
+        mock_is_release_commit,
+        mock_get_package_version,
+        mock_get_last_tag,
+        mock_get_last_release_commit,
+        mock_get_commits_since_ref,
+        mock_detect_version_bump,
+        mock_calculate_next_version,
+        mock_create_or_update_release_pr,
+        mock_set_output,
+        temp_dir: Path,
+    ) -> None:
+        """Test prepare mode falls back to config file values."""
+        os.chdir(temp_dir)
+        config_dir = temp_dir / ".github"
+        config_dir.mkdir()
+        (config_dir / "bloom-release.toml").write_text(
+            '[prepare]\nbase_branch = "jazzy"\nversion_bump = "minor"\n'
+        )
+
+        mock_parse_args.return_value = MagicMock(
+            config_file=".github/bloom-release.toml",
+            base_branch="",
+            version_bump="",
+        )
+        mock_is_release_commit.return_value = False
+        mock_get_package_version.return_value = "1.2.3"
+        mock_get_last_tag.return_value = "1.2.3"
+        mock_get_last_release_commit.return_value = None
+        mock_get_commits_since_ref.return_value = [
+            {"subject": "feat: add feature", "body": ""}
+        ]
+        mock_detect_version_bump.return_value = "minor"
+        mock_calculate_next_version.return_value = "1.3.0"
+        mock_create_or_update_release_pr.return_value = (
+            "https://github.com/example/pull/1",
+            True,
+        )
+
+        from prepare_release import main
+
+        main()
+
+        assert mock_calculate_next_version.call_args[0][1] == "minor"
+        assert mock_create_or_update_release_pr.call_args[0][0] == "jazzy"
+        mock_set_output.assert_any_call("version", "1.3.0")
+
+    @patch("prepare_release.set_output")
+    @patch("prepare_release.create_or_update_release_pr")
+    @patch("prepare_release.calculate_next_version")
+    @patch("prepare_release.get_commits_since_ref")
+    @patch("prepare_release.get_last_release_commit")
+    @patch("prepare_release.get_last_tag")
+    @patch("prepare_release.get_package_version")
+    @patch("prepare_release.is_release_commit")
+    @patch("prepare_release.parse_args")
+    def test_prepare_inputs_override_config(
+        self,
+        mock_parse_args,
+        mock_is_release_commit,
+        mock_get_package_version,
+        mock_get_last_tag,
+        mock_get_last_release_commit,
+        mock_get_commits_since_ref,
+        mock_calculate_next_version,
+        mock_create_or_update_release_pr,
+        mock_set_output,
+        temp_dir: Path,
+    ) -> None:
+        """Test direct prepare inputs override config values."""
+        os.chdir(temp_dir)
+        config_dir = temp_dir / ".github"
+        config_dir.mkdir()
+        (config_dir / "bloom-release.toml").write_text(
+            '[prepare]\nbase_branch = "jazzy"\nversion_bump = "minor"\n'
+        )
+
+        mock_parse_args.return_value = MagicMock(
+            config_file=".github/bloom-release.toml",
+            base_branch="rolling",
+            version_bump="patch",
+        )
+        mock_is_release_commit.return_value = False
+        mock_get_package_version.return_value = "1.2.3"
+        mock_get_last_tag.return_value = "1.2.3"
+        mock_get_last_release_commit.return_value = None
+        mock_get_commits_since_ref.return_value = [
+            {"subject": "feat: add feature", "body": ""}
+        ]
+        mock_calculate_next_version.return_value = "1.2.4"
+        mock_create_or_update_release_pr.return_value = (
+            "https://github.com/example/pull/1",
+            True,
+        )
+
+        from prepare_release import main
+
+        main()
+
+        assert mock_calculate_next_version.call_args[0][1] == "patch"
+        assert mock_create_or_update_release_pr.call_args[0][0] == "rolling"
+        mock_set_output.assert_any_call("version", "1.2.4")

@@ -18,15 +18,18 @@ from pathlib import Path
 from typing import Any, Optional
 
 from common import (
+    DEFAULT_CONFIG_FILE,
     discover_package_xmls,
-    get_exclude_paths_from_env,
+    get_config_string,
     get_last_tag,
     get_package_version,
     is_release_commit,
+    load_config_file,
     log_error,
     log_info,
     log_success,
     log_warning,
+    resolve_exclude_paths,
     run_command,
     set_output,
 )
@@ -798,6 +801,11 @@ def parse_args() -> argparse.Namespace:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
+        "--config-file",
+        default=DEFAULT_CONFIG_FILE,
+        help="Path to the TOML configuration file",
+    )
+    parser.add_argument(
         "--version-bump",
         default="auto",
         choices=["auto", "major", "minor", "patch"],
@@ -814,6 +822,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     """Main entry point."""
     args = parse_args()
+    config = load_config_file(args.config_file)
 
     # Self-no-op: skip when the push was caused by merging a release PR.
     # Works for squash and rebase merges; merge-commit merges are handled
@@ -823,9 +832,17 @@ def main() -> None:
         set_output("pr-created", "false")
         return
 
-    exclude_paths = get_exclude_paths_from_env()
+    exclude_paths = resolve_exclude_paths(config)
 
-    base_branch = args.base_branch
+    config_base_branch = get_config_string(
+        config, "prepare", "base_branch", field_name="prepare.base_branch"
+    )
+    config_version_bump = get_config_string(
+        config, "prepare", "version_bump", field_name="prepare.version_bump"
+    )
+
+    base_branch = args.base_branch or config_base_branch or "main"
+    version_bump = args.version_bump or config_version_bump or "auto"
 
     # Get current version from package.xml
     package_version = get_package_version(exclude_paths)
@@ -864,10 +881,10 @@ def main() -> None:
         return
 
     # Detect version bump
-    if args.version_bump == "auto":
+    if version_bump == "auto":
         bump_type = detect_version_bump_from_commits(commits)
     else:
-        bump_type = args.version_bump
+        bump_type = version_bump
         log_info(f"Using explicit version bump: {bump_type}")
 
     # Calculate next version

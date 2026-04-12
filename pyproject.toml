@@ -25,6 +25,7 @@ action = [
     # bloom 0.13 still imports pkg_resources; remove this pin once bloom > 0.13
     # is released without that dependency.
     "setuptools<81",
+    "tomli; python_version < '3.11'",
     "vcs2l",
 ]
 
