@@ -20,7 +20,6 @@ from typing import Optional
 import yaml
 
 from common import (
-    DEFAULT_CONFIG_FILE,
     discover_package_xmls,
     get_config_string,
     get_config_value,
@@ -786,7 +785,7 @@ def parse_track_list(output: str) -> Optional[set[str]]:
 
     try:
         parsed_tracks = ast.literal_eval(match.group(1))
-    except (SyntaxError, ValueError):
+    except SyntaxError, ValueError:
         return None
 
     if not isinstance(parsed_tracks, list):
@@ -852,7 +851,6 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--config-file",
-        default=DEFAULT_CONFIG_FILE,
         help="Path to the TOML configuration file",
     )
     parser.add_argument(

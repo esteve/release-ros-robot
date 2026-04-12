@@ -989,16 +989,14 @@ class TestPrepareConfig:
     ) -> None:
         """Test prepare mode falls back to config file values."""
         os.chdir(temp_dir)
-        config_dir = temp_dir / ".github"
-        config_dir.mkdir()
-        (config_dir / "bloom-release.toml").write_text(
+        (temp_dir / "bloom-release.toml").write_text(
             '[prepare]\nbase_branch = "jazzy"\nversion_bump = "minor"\n'
         )
 
         mock_parse_args.return_value = MagicMock(
-            config_file=".github/bloom-release.toml",
-            base_branch="",
-            version_bump="",
+            config_file=None,
+            base_branch="main",
+            version_bump="auto",
         )
         mock_is_release_commit.return_value = False
         mock_get_package_version.return_value = "1.2.3"
@@ -1046,14 +1044,12 @@ class TestPrepareConfig:
     ) -> None:
         """Test direct prepare inputs override config values."""
         os.chdir(temp_dir)
-        config_dir = temp_dir / ".github"
-        config_dir.mkdir()
-        (config_dir / "bloom-release.toml").write_text(
+        (temp_dir / "bloom-release.toml").write_text(
             '[prepare]\nbase_branch = "jazzy"\nversion_bump = "minor"\n'
         )
 
         mock_parse_args.return_value = MagicMock(
-            config_file=".github/bloom-release.toml",
+            config_file=None,
             base_branch="rolling",
             version_bump="patch",
         )

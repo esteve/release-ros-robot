@@ -11,7 +11,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
 from common import (
-    DEFAULT_CONFIG_FILE,
+    DEFAULT_CONFIG_FILES,
     discover_package_xmls,
     load_config_file,
     get_last_tag,
@@ -241,7 +241,7 @@ class TestConfigLoading:
         """Test the default missing config file is treated as optional."""
         os.chdir(temp_dir)
 
-        config = load_config_file(DEFAULT_CONFIG_FILE)
+        config = load_config_file(None)
 
         assert config == {}
 
@@ -255,13 +255,31 @@ class TestConfigLoading:
     def test_load_config_file(self, temp_dir: Path) -> None:
         """Test TOML config files are loaded successfully."""
         os.chdir(temp_dir)
-        config_dir = temp_dir / ".github"
-        config_dir.mkdir()
-        (config_dir / "bloom-release.toml").write_text(
+        (temp_dir / DEFAULT_CONFIG_FILES[0]).write_text(
             'repository = "pkg"\n[prepare]\nbase_branch = "jazzy"\n'
         )
 
-        config = load_config_file(DEFAULT_CONFIG_FILE)
+        config = load_config_file(None)
 
         assert config["repository"] == "pkg"
         assert config["prepare"]["base_branch"] == "jazzy"
+
+    def test_load_hidden_default_config_file(self, temp_dir: Path) -> None:
+        """Test the hidden root config file is also discovered by default."""
+        os.chdir(temp_dir)
+        (temp_dir / DEFAULT_CONFIG_FILES[1]).write_text('repository = "pkg"\n')
+
+        config = load_config_file(None)
+
+        assert config["repository"] == "pkg"
+
+    def test_load_default_config_fails_when_both_default_files_exist(
+        self, temp_dir: Path
+    ) -> None:
+        """Test ambiguous default config files are rejected."""
+        os.chdir(temp_dir)
+        for path in DEFAULT_CONFIG_FILES:
+            (temp_dir / path).write_text('repository = "pkg"\n')
+
+        with pytest.raises(SystemExit):
+            load_config_file(None)

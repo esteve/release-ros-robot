@@ -13,7 +13,7 @@
 #   BLOOM_GITHUB_USER  - GitHub username that owns the PAT. The action ensures
 #                        that this user's rosdistro fork exists before bloom runs.
 #
-# Customize the branches list and the .github/bloom-release.toml contents below
+# Customize the branches list and the bloom-release.toml contents below
 # to match your package. Action inputs override the config file when needed.
 #
 # Running in forks? Add the following to each job to prevent the workflow from
@@ -78,7 +78,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-# Add this file to .github/bloom-release.toml in the consumer repository:
+# Add this file to bloom-release.toml in the consumer repository root:
 #
 # repository = "my_ros_package"
 # release_repository = "https://github.com/ros2-gbp/my_ros_package-release.git"

@@ -18,7 +18,6 @@ from pathlib import Path
 from typing import Any, Optional
 
 from common import (
-    DEFAULT_CONFIG_FILE,
     discover_package_xmls,
     get_config_string,
     get_last_tag,
@@ -802,7 +801,6 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--config-file",
-        default=DEFAULT_CONFIG_FILE,
         help="Path to the TOML configuration file",
     )
     parser.add_argument(
@@ -841,8 +839,13 @@ def main() -> None:
         config, "prepare", "version_bump", field_name="prepare.version_bump"
     )
 
-    base_branch = args.base_branch or config_base_branch or "main"
-    version_bump = args.version_bump or config_version_bump or "auto"
+    base_branch = config_base_branch or "main"
+    if args.base_branch and args.base_branch != "main":
+        base_branch = args.base_branch
+
+    version_bump = config_version_bump or "auto"
+    if args.version_bump and args.version_bump != "auto":
+        version_bump = args.version_bump
 
     # Get current version from package.xml
     package_version = get_package_version(exclude_paths)

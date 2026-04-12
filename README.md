@@ -14,12 +14,12 @@ A GitHub Action to automate ROS package releases using `bloom-release`. It follo
 
 ## Quick Start
 
-Users familiar with [release-please](https://github.com/googleapis/release-please) or [release-plz](https://release-plz.dev/) will recognize the same PR-driven release workflow. Consumers usually add a workflow file plus a default `.github/bloom-release.toml` config.
+Users familiar with [release-please](https://github.com/googleapis/release-please) or [release-plz](https://release-plz.dev/) will recognize the same PR-driven release workflow. Consumers usually add a workflow file plus a default `bloom-release.toml` config in the repository root.
 
 1. When you merge PRs to `main`, the action creates/updates a release PR with changelog and version bump
 2. When you merge the release PR, the action automatically runs `bloom-release` for configured ROS distros
 
-Release mode uses branch-matched `targets` from `.github/bloom-release.toml` by
+Release mode uses branch-matched `targets` from `bloom-release.toml` by
 default, and direct action inputs override the config file when needed.
 
 ### 1. Create the GitHub workflow
@@ -89,7 +89,7 @@ Keep release runs sequential when multiple tracks share the same release
 repository. The configured `targets` do that inside one action invocation. If you
 switch back to a matrix, set `strategy.max-parallel: 1`.
 
-Create `.github/bloom-release.toml`:
+Create `bloom-release.toml` in the repository root:
 
 ```toml
 repository = "my_ros_package"
@@ -264,7 +264,7 @@ this exclusion, fixture `package.xml` files would be:
 | `repository` | Repository name as registered in rosdistro. Overrides the config file in release mode. | No | - |
 | `release-repository` | Release repository URL (e.g., `https://github.com/ros2-gbp/my_package-release.git`). Overrides the config file in release mode. | No | - |
 | `targets` | YAML block string mapping branches to sequential release targets. Overrides the config file in release mode. Each target entry must contain `rosdistro` and `track`. | No | - |
-| `config-file` | TOML config file path. Defaults to `.github/bloom-release.toml`. Direct action inputs override config values. | No | `.github/bloom-release.toml` |
+| `config-file` | TOML config file path. Defaults to `bloom-release.toml` or `.bloom-release.toml` in the repository root. Direct action inputs override config values. | No | auto-detect |
 | `dry-run` | Run without actually releasing | No | `false` |
 | `exclude-paths` | Newline-separated glob patterns to exclude from `package.xml` discovery | No | - |
 | `version-bump` | Version bump type: `auto`, `patch`, `minor`, `major` | No | `auto` |

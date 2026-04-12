@@ -39,9 +39,9 @@ inputs:
     default: ''
   config-file:
     description: >
-      TOML config file path. Defaults to .github/bloom-release.toml. Direct action inputs override config values.
+      TOML config file path. Defaults to bloom-release.toml or .bloom-release.toml in the repository root. Direct action inputs override config values.
     required: false
-    default: '.github/bloom-release.toml'
+    default: ''
   dry-run:
     description: 'Run in dry-run mode without actually releasing'
     required: false
@@ -56,11 +56,11 @@ inputs:
   version-bump:
     description: 'Version bump type: auto (detect from conventional commits), patch, minor, or major'
     required: false
-    default: ''
+    default: 'auto'
   base-branch:
     description: 'Base branch for release PR (only used in prepare mode)'
     required: false
-    default: ''
+    default: 'main'
 
 outputs:
   pr-created:

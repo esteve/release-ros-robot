@@ -20,7 +20,7 @@ if sys.version_info < (3, 11):  # pragma: no cover - Python 3.10 fallback
     tomllib = importlib.import_module("tomli")
 
 
-DEFAULT_CONFIG_FILE = ".github/bloom-release.toml"
+DEFAULT_CONFIG_FILES = ("bloom-release.toml", ".bloom-release.toml")
 
 
 def log_info(msg: str) -> None:
@@ -73,35 +73,51 @@ def set_output(name: str, value: str) -> None:
         log_info(f"Output: {name}={value}")
 
 
-def load_config_file(config_file: str) -> dict[str, Any]:
+def load_config_file(config_file: Optional[str]) -> dict[str, Any]:
     """Load the action TOML configuration file if it exists.
 
     Args:
-        config_file: Path to the TOML configuration file.
+        config_file: Optional path to the TOML configuration file.
 
     Returns:
         Parsed top-level TOML table, or an empty dict when the file does not
         exist.
     """
-    config_path = Path(config_file)
-    if not config_path.exists():
-        if config_file != DEFAULT_CONFIG_FILE:
-            log_error(f"Config file not found: {config_file}")
+    resolved_path: Optional[Path] = None
+    if config_file:
+        resolved_path = Path(config_file)
+    else:
+        existing_defaults = [
+            Path(path) for path in DEFAULT_CONFIG_FILES if Path(path).exists()
+        ]
+        if len(existing_defaults) > 1:
+            names = ", ".join(path.as_posix() for path in existing_defaults)
+            log_error(f"Multiple default config files found; keep only one: {names}")
             sys.exit(1)
-        return {}
+        if len(existing_defaults) == 1:
+            resolved_path = existing_defaults[0]
+        else:
+            return {}
+
+    config_path = resolved_path
+    if not config_path.exists():
+        log_error(f"Config file not found: {config_path.as_posix()}")
+        sys.exit(1)
 
     try:
         with open(config_path, "rb") as f:
             config = tomllib.load(f)
     except (OSError, tomllib.TOMLDecodeError) as error:
-        log_error(f"Failed to load config file {config_file}: {error}")
+        log_error(f"Failed to load config file {config_path.as_posix()}: {error}")
         sys.exit(1)
 
     if not isinstance(config, dict):
-        log_error(f"Config file {config_file} must contain a top-level TOML table")
+        log_error(
+            f"Config file {config_path.as_posix()} must contain a top-level TOML table"
+        )
         sys.exit(1)
 
-    log_info(f"Loaded config file: {config_file}")
+    log_info(f"Loaded config file: {config_path.as_posix()}")
     return config
 
 

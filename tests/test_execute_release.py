@@ -908,7 +908,7 @@ class TestMainTargetsMode:
     ) -> None:
         """Test batch mode runs matching targets in declared order."""
         mock_parse_args.return_value = MagicMock(
-            config_file=".github/bloom-release.toml",
+            config_file=None,
             repository="test_package",
             release_repository="https://github.com/ros2-gbp/test_package-release.git",
             targets=(
@@ -965,7 +965,7 @@ class TestMainTargetsMode:
     ) -> None:
         """Test batch mode no-ops cleanly when no targets match the branch."""
         mock_parse_args.return_value = MagicMock(
-            config_file=".github/bloom-release.toml",
+            config_file=None,
             repository="test_package",
             release_repository="https://github.com/ros2-gbp/test_package-release.git",
             targets="main:\n  - rosdistro: rolling\n    track: rolling\n",
@@ -1008,7 +1008,7 @@ class TestMainTargetsMode:
     ) -> None:
         """Test release mode falls back to config file values."""
         mock_parse_args.return_value = MagicMock(
-            config_file=".github/bloom-release.toml",
+            config_file=None,
             repository="",
             release_repository="",
             targets="",
@@ -1066,7 +1066,7 @@ class TestMainTargetsMode:
     ) -> None:
         """Test batch mode stops on the first failed target."""
         mock_parse_args.return_value = MagicMock(
-            config_file=".github/bloom-release.toml",
+            config_file=None,
             repository="test_package",
             release_repository="https://github.com/ros2-gbp/test_package-release.git",
             targets=(
