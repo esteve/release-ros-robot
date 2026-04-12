@@ -104,9 +104,8 @@ runs:
       shell: bash
       env:
         INPUT_OAUTH_TOKEN: ${{ inputs.oauth-token }}
+        INPUT_GITHUB_USER: ${{ inputs.github-user }}
       run: |
-        git config --global user.name "github-actions[bot]"
-        git config --global user.email "github-actions[bot]@users.noreply.github.com"
         git config --global credential.helper store
 
         if [ "${{ inputs.mode }}" = "prepare" ]; then
@@ -116,15 +115,35 @@ runs:
                  "Add 'permissions: contents: write' to the job."
             exit 1
           fi
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
           echo "https://x-access-token:${GITHUB_TOKEN}@github.com" > ~/.git-credentials
         else
           # release mode: authenticate with BLOOM_OAUTH_TOKEN (env-first, input fallback).
           _TOKEN="${BLOOM_OAUTH_TOKEN:-${INPUT_OAUTH_TOKEN:-}}"
+          _USER="${BLOOM_GITHUB_USER:-${INPUT_GITHUB_USER:-}}"
           if [ -z "${_TOKEN}" ]; then
             echo "::error::release mode requires BLOOM_OAUTH_TOKEN env var or oauth-token input."
             exit 1
           fi
+          if [ -z "${_USER}" ]; then
+            echo "::error::release mode requires BLOOM_GITHUB_USER env var or github-user input."
+            exit 1
+          fi
+
           echo "https://x-access-token:${_TOKEN}@github.com" > ~/.git-credentials
+
+          export GH_TOKEN="${_TOKEN}"
+          _LOGIN="$(gh api user --jq '.login')"
+          _ID="$(gh api user --jq '.id')"
+
+          if [ "${_LOGIN}" != "${_USER}" ]; then
+            echo "::error::BLOOM_GITHUB_USER (${_USER}) does not match the PAT owner (${_LOGIN})."
+            exit 1
+          fi
+
+          git config --global user.name "${_USER}"
+          git config --global user.email "${_ID}+${_USER}@users.noreply.github.com"
         fi
 
     - name: Configure Bloom
