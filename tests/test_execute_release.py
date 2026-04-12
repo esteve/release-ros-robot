@@ -172,6 +172,30 @@ class TestRunBloomRelease:
             assert "https://github.com/ros2-gbp/test_package-release.git" in args
 
     @patch("execute_release.run_command")
+    def test_run_bloom_release_is_non_interactive(self, mock_run) -> None:
+        """Test that bloom-release is always run in non-interactive mode."""
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = "Success"
+        mock_result.stderr = ""
+        mock_run.return_value = mock_result
+
+        run_bloom_release(
+            repo_name="test_package",
+            rosdistro="rolling",
+            track="rolling",
+            release_repo="https://github.com/ros2-gbp/test_package-release.git",
+        )
+
+        bloom_calls = [
+            call for call in mock_run.call_args_list if "bloom-release" in str(call)
+        ]
+        assert len(bloom_calls) > 0
+        for call_obj in bloom_calls:
+            args = call_obj[0][0] if call_obj[0] else []
+            assert "--non-interactive" in args
+
+    @patch("execute_release.run_command")
     def test_run_bloom_release_no_new_track_by_default(self, mock_run):
         """Test that --new-track is not passed when new_track=False (default)."""
         mock_result = MagicMock()
