@@ -13,6 +13,7 @@ from common import get_last_tag, get_package_version, is_release_commit
 from execute_release import (
     check_track_exists,
     ensure_release_tag,
+    extract_rosdistro_pr_url,
     get_current_branch,
     get_local_tag_target,
     get_remote_tag_target,
@@ -98,6 +99,24 @@ class TestReleaseRepoPushConflict:
         result = is_release_repo_push_conflict("permission denied")
 
         assert result is False
+
+
+class TestExtractRosdistroPrUrl:
+    """Tests for rosdistro PR URL extraction."""
+
+    def test_extract_rosdistro_pr_url(self) -> None:
+        """Test extracting a rosdistro PR URL from bloom output."""
+        result = extract_rosdistro_pr_url(
+            "Opened pull request https://github.com/ros/rosdistro/pull/123\n"
+        )
+
+        assert result == "https://github.com/ros/rosdistro/pull/123"
+
+    def test_extract_rosdistro_pr_url_missing(self) -> None:
+        """Test missing PR URLs return None."""
+        result = extract_rosdistro_pr_url("no pr here")
+
+        assert result is None
 
 
 class TestTagHelpers:
@@ -302,32 +321,37 @@ class TestRunBloomRelease:
     """Tests for run_bloom_release function."""
 
     @patch("execute_release.run_command")
-    def test_run_bloom_release_calls_bloom(self, mock_run):
-        """Test that bloom-release is invoked with the expected arguments."""
-        mock_result = MagicMock()
-        mock_result.returncode = 0
-        mock_result.stdout = "Success"
-        mock_result.stderr = ""
-        mock_run.return_value = mock_result
+    def test_run_bloom_release_calls_bloom(self, mock_run) -> None:
+        """Test that bloom-release runs release and PR phases."""
+        release_result = MagicMock(returncode=0, stdout="release ok", stderr="")
+        pr_result = MagicMock(
+            returncode=0,
+            stdout="https://github.com/ros/rosdistro/pull/123\n",
+            stderr="",
+        )
+        mock_run.side_effect = [release_result, pr_result]
 
-        run_bloom_release(
+        result = run_bloom_release(
             repo_name="test_package",
             rosdistro="rolling",
             track="rolling",
             release_repo="https://github.com/test/repo.git",
         )
 
-        # Verify bloom-release was called
+        assert result == "https://github.com/ros/rosdistro/pull/123"
+        assert len(mock_run.call_args_list) == 2
         assert any("bloom-release" in str(call) for call in mock_run.call_args_list)
 
     @patch("execute_release.run_command")
-    def test_run_bloom_release_passes_release_repo(self, mock_run):
+    def test_run_bloom_release_passes_release_repo(self, mock_run) -> None:
         """Test that --override-release-repository-url is always passed."""
-        mock_result = MagicMock()
-        mock_result.returncode = 0
-        mock_result.stdout = "Success"
-        mock_result.stderr = ""
-        mock_run.return_value = mock_result
+        release_result = MagicMock(returncode=0, stdout="release ok", stderr="")
+        pr_result = MagicMock(
+            returncode=0,
+            stdout="https://github.com/ros/rosdistro/pull/123\n",
+            stderr="",
+        )
+        mock_run.side_effect = [release_result, pr_result]
 
         run_bloom_release(
             repo_name="test_package",
@@ -348,11 +372,13 @@ class TestRunBloomRelease:
     @patch("execute_release.run_command")
     def test_run_bloom_release_is_non_interactive(self, mock_run) -> None:
         """Test that bloom-release is always run in non-interactive mode."""
-        mock_result = MagicMock()
-        mock_result.returncode = 0
-        mock_result.stdout = "Success"
-        mock_result.stderr = ""
-        mock_run.return_value = mock_result
+        release_result = MagicMock(returncode=0, stdout="release ok", stderr="")
+        pr_result = MagicMock(
+            returncode=0,
+            stdout="https://github.com/ros/rosdistro/pull/123\n",
+            stderr="",
+        )
+        mock_run.side_effect = [release_result, pr_result]
 
         run_bloom_release(
             repo_name="test_package",
@@ -370,13 +396,15 @@ class TestRunBloomRelease:
             assert "--non-interactive" in args
 
     @patch("execute_release.run_command")
-    def test_run_bloom_release_no_new_track_by_default(self, mock_run):
+    def test_run_bloom_release_no_new_track_by_default(self, mock_run) -> None:
         """Test that --new-track is not passed when new_track=False (default)."""
-        mock_result = MagicMock()
-        mock_result.returncode = 0
-        mock_result.stdout = "Success"
-        mock_result.stderr = ""
-        mock_run.return_value = mock_result
+        release_result = MagicMock(returncode=0, stdout="release ok", stderr="")
+        pr_result = MagicMock(
+            returncode=0,
+            stdout="https://github.com/ros/rosdistro/pull/123\n",
+            stderr="",
+        )
+        mock_run.side_effect = [release_result, pr_result]
 
         run_bloom_release(
             repo_name="test_package",
@@ -394,13 +422,15 @@ class TestRunBloomRelease:
             assert "--new-track" not in args
 
     @patch("execute_release.run_command")
-    def test_run_bloom_release_new_track(self, mock_run):
+    def test_run_bloom_release_new_track(self, mock_run) -> None:
         """Test that --new-track is passed when new_track=True."""
-        mock_result = MagicMock()
-        mock_result.returncode = 0
-        mock_result.stdout = "Success"
-        mock_result.stderr = ""
-        mock_run.return_value = mock_result
+        release_result = MagicMock(returncode=0, stdout="release ok", stderr="")
+        pr_result = MagicMock(
+            returncode=0,
+            stdout="https://github.com/ros/rosdistro/pull/123\n",
+            stderr="",
+        )
+        mock_run.side_effect = [release_result, pr_result]
 
         run_bloom_release(
             repo_name="test_package",
@@ -420,11 +450,37 @@ class TestRunBloomRelease:
         )
         assert found_new_track
 
+    @patch("execute_release.run_command")
+    def test_run_bloom_release_splits_release_and_pr_flags(self, mock_run) -> None:
+        """Test the release and PR phases use the expected bloom flags."""
+        release_result = MagicMock(returncode=0, stdout="release ok", stderr="")
+        pr_result = MagicMock(
+            returncode=0,
+            stdout="https://github.com/ros/rosdistro/pull/123\n",
+            stderr="",
+        )
+        mock_run.side_effect = [release_result, pr_result]
+
+        run_bloom_release(
+            repo_name="test_package",
+            rosdistro="rolling",
+            track="rolling",
+            release_repo="https://github.com/ros2-gbp/test_package-release.git",
+        )
+
+        release_args = mock_run.call_args_list[0][0][0]
+        pr_args = mock_run.call_args_list[1][0][0]
+
+        assert "--no-pull-request" in release_args
+        assert "--pull-request-only" not in release_args
+        assert "--pull-request-only" in pr_args
+        assert "--no-pull-request" not in pr_args
+
     @patch("execute_release.log_error")
     @patch("execute_release.run_command")
     def test_run_bloom_release_logs_stdout_stderr_on_failure(
         self, mock_run, mock_log_error
-    ):
+    ) -> None:
         """Test that bloom stdout and stderr are logged when bloom-release fails."""
         mock_run.side_effect = subprocess.CalledProcessError(
             1,
@@ -446,12 +502,11 @@ class TestRunBloomRelease:
         assert any("bloom stdout details" in msg for msg in logged_messages)
         assert any("bloom stderr details" in msg for msg in logged_messages)
 
-    @patch("execute_release.time.sleep")
     @patch("execute_release.run_command")
-    def test_run_bloom_release_retries_release_repo_push_conflict(
-        self, mock_run, mock_sleep
+    def test_run_bloom_release_continues_after_release_repo_push_conflict(
+        self, mock_run
     ) -> None:
-        """Test bloom-release retries when the release repository push races."""
+        """Test bloom-release continues to PR creation after a push race."""
         conflict_error = subprocess.CalledProcessError(
             1,
             ["bloom-release", "--rosdistro", "rolling", "test_package"],
@@ -477,14 +532,10 @@ class TestRunBloomRelease:
 
         assert result == "https://github.com/ros/rosdistro/pull/123"
         assert mock_run.call_count == 2
-        mock_sleep.assert_called_once_with(1)
 
-    @patch("execute_release.time.sleep")
     @patch("execute_release.run_command")
-    def test_run_bloom_release_does_not_retry_unrelated_failure(
-        self, mock_run, mock_sleep
-    ) -> None:
-        """Test bloom-release does not retry unrelated command failures."""
+    def test_run_bloom_release_does_not_retry_unrelated_failure(self, mock_run) -> None:
+        """Test bloom-release stops on unrelated release failures."""
         mock_run.side_effect = subprocess.CalledProcessError(
             1,
             ["bloom-release", "--rosdistro", "rolling", "test_package"],
@@ -501,7 +552,30 @@ class TestRunBloomRelease:
 
         assert result is None
         assert mock_run.call_count == 1
-        mock_sleep.assert_not_called()
+
+    @patch("execute_release.log_error")
+    @patch("execute_release.run_command")
+    def test_run_bloom_release_logs_pr_phase_without_url(
+        self, mock_run, mock_log_error
+    ) -> None:
+        """Test missing PR URLs in the PR-only phase are logged as errors."""
+        release_result = MagicMock(returncode=0, stdout="release ok", stderr="")
+        pr_result = MagicMock(returncode=0, stdout="no pr here", stderr="")
+        mock_run.side_effect = [release_result, pr_result]
+
+        result = run_bloom_release(
+            repo_name="test_package",
+            rosdistro="rolling",
+            track="rolling",
+            release_repo="https://github.com/ros2-gbp/test_package-release.git",
+        )
+
+        assert result is None
+        logged_messages = [call.args[0] for call in mock_log_error.call_args_list]
+        assert any(
+            "completed without producing a rosdistro PR URL" in msg
+            for msg in logged_messages
+        )
 
 
 class TestIntegration:
