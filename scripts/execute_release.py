@@ -13,6 +13,7 @@ import ast
 import re
 import subprocess
 import sys
+import time
 from typing import Optional
 
 from common import (
@@ -191,6 +192,23 @@ def ensure_release_tag(tag: str) -> bool:
     return True
 
 
+def is_release_repo_push_conflict(output: str) -> bool:
+    """Return True if bloom failed on a release-repository push race.
+
+    Args:
+        output: Combined stdout and stderr from bloom-release.
+
+    Returns:
+        True when bloom hit its non-fast-forward retry/force prompt path for
+        the release repository, False otherwise.
+    """
+    return (
+        "failed to push some refs to" in output
+        and "(fetch first)" in output
+        and "would you like to add '--force'" in output
+    )
+
+
 def run_bloom_release(
     repo_name: str,
     rosdistro: str,
@@ -230,28 +248,41 @@ def run_bloom_release(
     # Set BLOOM_SKIP_ROSDEP_UPDATE to speed up subsequent releases
     env = {"BLOOM_SKIP_ROSDEP_UPDATE": "1"}
 
-    try:
-        result = run_command(cmd, capture_output=True, env=env)
-        output = result.stdout + result.stderr
+    max_attempts = 3
+    for attempt in range(1, max_attempts + 1):
+        try:
+            result = run_command(cmd, capture_output=True, env=env)
+            output = result.stdout + result.stderr
 
-        # Extract PR URL from output
-        pr_match = re.search(r"(https://github\.com/ros/rosdistro/pull/\d+)", output)
-        if pr_match:
-            return pr_match.group(1)
+            # Extract PR URL from output
+            pr_match = re.search(
+                r"(https://github\.com/ros/rosdistro/pull/\d+)", output
+            )
+            if pr_match:
+                return pr_match.group(1)
 
-        log_error("bloom-release completed without producing a rosdistro PR URL")
-        if result.stdout:
-            log_error(f"bloom-release stdout:\n{result.stdout}")
-        if result.stderr:
-            log_error(f"bloom-release stderr:\n{result.stderr}")
+            log_error("bloom-release completed without producing a rosdistro PR URL")
+            if result.stdout:
+                log_error(f"bloom-release stdout:\n{result.stdout}")
+            if result.stderr:
+                log_error(f"bloom-release stderr:\n{result.stderr}")
+            return None
 
-    except subprocess.CalledProcessError as e:
-        log_error(f"bloom-release failed: {e}")
-        if e.stdout:
-            log_error(f"bloom-release stdout:\n{e.stdout}")
-        if e.stderr:
-            log_error(f"bloom-release stderr:\n{e.stderr}")
-        return None
+        except subprocess.CalledProcessError as e:
+            output = (e.stdout or "") + (e.stderr or "")
+            if attempt < max_attempts and is_release_repo_push_conflict(output):
+                log_warning(
+                    "bloom-release hit a release-repository push race; retrying"
+                )
+                time.sleep(attempt)
+                continue
+
+            log_error(f"bloom-release failed: {e}")
+            if e.stdout:
+                log_error(f"bloom-release stdout:\n{e.stdout}")
+            if e.stderr:
+                log_error(f"bloom-release stderr:\n{e.stderr}")
+            return None
 
     return None
 
