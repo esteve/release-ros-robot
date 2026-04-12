@@ -16,10 +16,12 @@ from execute_release import (
     extract_rosdistro_pr_url,
     get_current_branch,
     get_local_tag_target,
+    get_package_names,
     get_remote_tag_target,
     is_release_repo_push_conflict,
     parse_remote_tag_target,
     parse_track_list,
+    release_repo_has_expected_release_tags,
     run_bloom_release,
 )
 
@@ -117,6 +119,69 @@ class TestExtractRosdistroPrUrl:
         result = extract_rosdistro_pr_url("no pr here")
 
         assert result is None
+
+
+class TestPackageNames:
+    """Tests for package name discovery."""
+
+    def test_get_package_names(self, temp_dir: Path) -> None:
+        """Test package names are discovered from package.xml files."""
+        os.chdir(temp_dir)
+        (temp_dir / "pkg_a").mkdir()
+        (temp_dir / "pkg_b").mkdir()
+        (temp_dir / "pkg_a" / "package.xml").write_text(
+            "<package><name>pkg_a</name><version>1.2.3</version></package>"
+        )
+        (temp_dir / "pkg_b" / "package.xml").write_text(
+            "<package><name>pkg_b</name><version>1.2.3</version></package>"
+        )
+
+        result = get_package_names([])
+
+        assert result == ["pkg_a", "pkg_b"]
+
+
+class TestReleaseRepoVerification:
+    """Tests for release-repository state verification."""
+
+    @patch("execute_release.run_command")
+    def test_release_repo_has_expected_release_tags(self, mock_run) -> None:
+        """Test remote release tags are matched per track, package, and version."""
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = (
+            "abc refs/tags/release/jazzy/pkg_a/1.2.3-1\n"
+            "def refs/tags/release/jazzy/pkg_b/1.2.3-2\n"
+        )
+        mock_result.stderr = ""
+        mock_run.return_value = mock_result
+
+        result = release_repo_has_expected_release_tags(
+            release_repo="https://github.com/test/repo-release.git",
+            track="jazzy",
+            version="1.2.3",
+            package_names=["pkg_a", "pkg_b"],
+        )
+
+        assert result is True
+
+    @patch("execute_release.run_command")
+    def test_release_repo_missing_expected_release_tags(self, mock_run) -> None:
+        """Test missing per-package release tags fail verification."""
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = "abc refs/tags/release/jazzy/pkg_a/1.2.3-1\n"
+        mock_result.stderr = ""
+        mock_run.return_value = mock_result
+
+        result = release_repo_has_expected_release_tags(
+            release_repo="https://github.com/test/repo-release.git",
+            track="jazzy",
+            version="1.2.3",
+            package_names=["pkg_a", "pkg_b"],
+        )
+
+        assert result is False
 
 
 class TestTagHelpers:
@@ -336,6 +401,8 @@ class TestRunBloomRelease:
             rosdistro="rolling",
             track="rolling",
             release_repo="https://github.com/test/repo.git",
+            version="1.2.3",
+            package_names=["test_package"],
         )
 
         assert result == "https://github.com/ros/rosdistro/pull/123"
@@ -358,6 +425,8 @@ class TestRunBloomRelease:
             rosdistro="rolling",
             track="rolling",
             release_repo="https://github.com/ros2-gbp/test_package-release.git",
+            version="1.2.3",
+            package_names=["test_package"],
         )
 
         bloom_calls = [
@@ -385,6 +454,8 @@ class TestRunBloomRelease:
             rosdistro="rolling",
             track="rolling",
             release_repo="https://github.com/ros2-gbp/test_package-release.git",
+            version="1.2.3",
+            package_names=["test_package"],
         )
 
         bloom_calls = [
@@ -411,6 +482,8 @@ class TestRunBloomRelease:
             rosdistro="rolling",
             track="rolling",
             release_repo="https://github.com/ros2-gbp/test_package-release.git",
+            version="1.2.3",
+            package_names=["test_package"],
         )
 
         bloom_calls = [
@@ -437,6 +510,8 @@ class TestRunBloomRelease:
             rosdistro="rolling",
             track="rolling",
             release_repo="https://github.com/ros2-gbp/test_package-release.git",
+            version="1.2.3",
+            package_names=["test_package"],
             new_track=True,
         )
 
@@ -466,6 +541,8 @@ class TestRunBloomRelease:
             rosdistro="rolling",
             track="rolling",
             release_repo="https://github.com/ros2-gbp/test_package-release.git",
+            version="1.2.3",
+            package_names=["test_package"],
         )
 
         release_args = mock_run.call_args_list[0][0][0]
@@ -494,6 +571,8 @@ class TestRunBloomRelease:
             rosdistro="rolling",
             track="rolling",
             release_repo="https://github.com/ros2-gbp/test_package-release.git",
+            version="1.2.3",
+            package_names=["test_package"],
         )
 
         assert result is None
@@ -502,9 +581,10 @@ class TestRunBloomRelease:
         assert any("bloom stdout details" in msg for msg in logged_messages)
         assert any("bloom stderr details" in msg for msg in logged_messages)
 
+    @patch("execute_release.release_repo_has_expected_release_tags")
     @patch("execute_release.run_command")
     def test_run_bloom_release_continues_after_release_repo_push_conflict(
-        self, mock_run
+        self, mock_run, mock_verify_release_repo
     ) -> None:
         """Test bloom-release continues to PR creation after a push race."""
         conflict_error = subprocess.CalledProcessError(
@@ -522,16 +602,50 @@ class TestRunBloomRelease:
         success_result.stdout = "https://github.com/ros/rosdistro/pull/123\n"
         success_result.stderr = ""
         mock_run.side_effect = [conflict_error, success_result]
+        mock_verify_release_repo.return_value = True
 
         result = run_bloom_release(
             repo_name="test_package",
             rosdistro="rolling",
             track="rolling",
             release_repo="https://github.com/ros2-gbp/test_package-release.git",
+            version="1.2.3",
+            package_names=["test_package"],
         )
 
         assert result == "https://github.com/ros/rosdistro/pull/123"
         assert mock_run.call_count == 2
+
+    @patch("execute_release.release_repo_has_expected_release_tags")
+    @patch("execute_release.run_command")
+    def test_run_bloom_release_stops_after_unverified_release_repo_push_conflict(
+        self, mock_run, mock_verify_release_repo
+    ) -> None:
+        """Test push-race conflicts fail when remote release tags are missing."""
+        conflict_error = subprocess.CalledProcessError(
+            1,
+            ["bloom-release", "--rosdistro", "rolling", "test_package"],
+            output=(
+                "error: failed to push some refs to 'https://github.com/test/repo.git'\n"
+                "! [rejected] master -> master (fetch first)\n"
+                "Pushing changes failed, would you like to add '--force' to 'git push --all'?\n"
+            ),
+            stderr="",
+        )
+        mock_run.side_effect = [conflict_error]
+        mock_verify_release_repo.return_value = False
+
+        result = run_bloom_release(
+            repo_name="test_package",
+            rosdistro="rolling",
+            track="rolling",
+            release_repo="https://github.com/ros2-gbp/test_package-release.git",
+            version="1.2.3",
+            package_names=["test_package"],
+        )
+
+        assert result is None
+        assert mock_run.call_count == 1
 
     @patch("execute_release.run_command")
     def test_run_bloom_release_does_not_retry_unrelated_failure(self, mock_run) -> None:
@@ -548,6 +662,8 @@ class TestRunBloomRelease:
             rosdistro="rolling",
             track="rolling",
             release_repo="https://github.com/ros2-gbp/test_package-release.git",
+            version="1.2.3",
+            package_names=["test_package"],
         )
 
         assert result is None
@@ -568,6 +684,8 @@ class TestRunBloomRelease:
             rosdistro="rolling",
             track="rolling",
             release_repo="https://github.com/ros2-gbp/test_package-release.git",
+            version="1.2.3",
+            package_names=["test_package"],
         )
 
         assert result is None
