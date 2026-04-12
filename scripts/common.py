@@ -9,16 +9,11 @@ import os
 import re
 import subprocess
 import sys
+import tomllib
 import xml.etree.ElementTree as ET
 from fnmatch import fnmatch
 from pathlib import Path
-import importlib
 from typing import Any, Optional
-
-tomllib = importlib.import_module("tomllib")
-if sys.version_info < (3, 11):  # pragma: no cover - Python 3.10 fallback
-    tomllib = importlib.import_module("tomli")
-
 
 DEFAULT_CONFIG_FILES = ("bloom-release.toml", ".bloom-release.toml")
 

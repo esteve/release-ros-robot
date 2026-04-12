@@ -17,7 +17,7 @@ import sys
 import xml.etree.ElementTree as ET
 from typing import Optional
 
-import yaml
+import yaml  # type: ignore[import-untyped]
 
 from common import (
     discover_package_xmls,
