@@ -124,7 +124,8 @@ jobs:
 `BLOOM_GITHUB_USER`, The GitHub username that owns the PAT above.
 bloom-release uses a fork-based workflow: it pushes rosdistro changes to
 `<BLOOM_GITHUB_USER>/rosdistro` before opening a PR to `ros/rosdistro`.
-The user must have forked https://github.com/ros/rosdistro beforehand.
+The action ensures this fork exists before running bloom. On the first release,
+it may create `<BLOOM_GITHUB_USER>/rosdistro` automatically.
 
 The `release-pr` job uses the built-in `GITHUB_TOKEN`, no extra secrets needed.
 
@@ -163,9 +164,10 @@ decide whether to proceed. On any other push the job exits immediately.
 
 1. Reads version from `package.xml` (already updated by prepare mode)
 2. Creates git tag with version number (idempotent. Skips if tag already exists)
-3. Runs `bloom-release` with the explicitly provided repository, distribution,
+3. Ensures the PAT owner's `rosdistro` fork exists
+4. Runs `bloom-release` with the explicitly provided repository, distribution,
    track, and release repository
-4. Creates PR(s) to ros/rosdistro
+5. Creates PR(s) to ros/rosdistro
 
 Because the no-op guard is commit-driven rather than tag-driven, multiple
 release steps targeting different tracks on the same branch all run on the
@@ -327,8 +329,8 @@ bloom-release pushes to `https://github.com/<BLOOM_GITHUB_USER>/rosdistro`
 before opening a PR to `ros/rosdistro`. Ensure:
 
 1. `BLOOM_GITHUB_USER` is the owner of the PAT in `BLOOM_OAUTH_TOKEN`
-2. That user has forked https://github.com/ros/rosdistro
-3. The PAT has `public_repo` and `workflow` scopes
+2. The PAT has `public_repo` and `workflow` scopes
+3. That user is allowed to create a fork of https://github.com/ros/rosdistro
 
 ### `release-pr` job fails with a permission error
 
