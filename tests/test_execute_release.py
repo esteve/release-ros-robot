@@ -12,7 +12,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 from common import get_last_tag, get_package_version, is_release_commit
 from execute_release import (
     check_track_exists,
+    ensure_release_tag,
     get_current_branch,
+    get_local_tag_target,
+    get_remote_tag_target,
+    parse_remote_tag_target,
     parse_track_list,
     run_bloom_release,
 )
@@ -48,6 +52,153 @@ class TestParseTrackList:
         result = parse_track_list("tracks:\n- rolling\n")
 
         assert result is None
+
+
+class TestRemoteTagParsing:
+    """Tests for remote tag parsing helpers."""
+
+    def test_parse_remote_tag_target_prefers_peeled_ref(self) -> None:
+        """Test peeled annotated-tag refs are preferred over tag object refs."""
+        output = (
+            "1111111111111111111111111111111111111111 refs/tags/1.2.3\n"
+            "2222222222222222222222222222222222222222 refs/tags/1.2.3^{}\n"
+        )
+
+        result = parse_remote_tag_target(output, "1.2.3")
+
+        assert result == "2222222222222222222222222222222222222222"
+
+    def test_parse_remote_tag_target_uses_direct_ref_when_not_annotated(self) -> None:
+        """Test lightweight tags resolve from the direct remote ref."""
+        output = "3333333333333333333333333333333333333333 refs/tags/1.2.3\n"
+
+        result = parse_remote_tag_target(output, "1.2.3")
+
+        assert result == "3333333333333333333333333333333333333333"
+
+
+class TestTagHelpers:
+    """Tests for release tag helper functions."""
+
+    @patch("execute_release.run_command")
+    def test_get_local_tag_target(self, mock_run) -> None:
+        """Test resolving the commit targeted by a local tag."""
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = "abc123\n"
+        mock_result.stderr = ""
+        mock_run.return_value = mock_result
+
+        result = get_local_tag_target("1.2.3")
+
+        assert result == "abc123"
+
+    @patch("execute_release.run_command")
+    def test_get_remote_tag_target(self, mock_run) -> None:
+        """Test resolving the commit targeted by a remote annotated tag."""
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = (
+            "1111111111111111111111111111111111111111 refs/tags/1.2.3\n"
+            "abc123 refs/tags/1.2.3^{}\n"
+        )
+        mock_result.stderr = ""
+        mock_run.return_value = mock_result
+
+        result = get_remote_tag_target("1.2.3")
+
+        assert result == "abc123"
+
+
+class TestEnsureReleaseTag:
+    """Tests for ensure_release_tag function."""
+
+    @patch("execute_release.run_command")
+    def test_ensure_release_tag_success(self, mock_run) -> None:
+        """Test normal tag creation and push success."""
+        head_result = MagicMock(returncode=0, stdout="head123\n", stderr="")
+        create_result = MagicMock(returncode=0, stdout="", stderr="")
+        push_result = MagicMock(returncode=0, stdout="", stderr="")
+        mock_run.side_effect = [head_result, create_result, push_result]
+
+        result = ensure_release_tag("1.2.3")
+
+        assert result is True
+
+    @patch("execute_release.get_local_tag_target")
+    @patch("execute_release.run_command")
+    def test_ensure_release_tag_local_race_same_head(
+        self, mock_run, mock_get_local_tag_target
+    ) -> None:
+        """Test local tag creation failure is tolerated when tag points to HEAD."""
+        head_result = MagicMock(returncode=0, stdout="head123\n", stderr="")
+        create_result = MagicMock(returncode=128, stdout="", stderr="tag exists")
+        push_result = MagicMock(returncode=0, stdout="", stderr="")
+        mock_run.side_effect = [head_result, create_result, push_result]
+        mock_get_local_tag_target.return_value = "head123"
+
+        result = ensure_release_tag("1.2.3")
+
+        assert result is True
+
+    @patch("execute_release.log_error")
+    @patch("execute_release.get_local_tag_target")
+    @patch("execute_release.run_command")
+    def test_ensure_release_tag_local_race_wrong_head(
+        self, mock_run, mock_get_local_tag_target, mock_log_error
+    ) -> None:
+        """Test local tag creation failure aborts when tag points elsewhere."""
+        head_result = MagicMock(returncode=0, stdout="head123\n", stderr="")
+        create_result = MagicMock(returncode=128, stdout="", stderr="tag exists")
+        mock_run.side_effect = [head_result, create_result]
+        mock_get_local_tag_target.return_value = "other456"
+
+        result = ensure_release_tag("1.2.3")
+
+        assert result is False
+        logged_messages = [call.args[0] for call in mock_log_error.call_args_list]
+        assert any(
+            "Local tag 1.2.3 points to other456, expected head123" in msg
+            for msg in logged_messages
+        )
+
+    @patch("execute_release.get_remote_tag_target")
+    @patch("execute_release.run_command")
+    def test_ensure_release_tag_remote_race_same_head(
+        self, mock_run, mock_get_remote_tag_target
+    ) -> None:
+        """Test push failure is tolerated when remote tag already points to HEAD."""
+        head_result = MagicMock(returncode=0, stdout="head123\n", stderr="")
+        create_result = MagicMock(returncode=0, stdout="", stderr="")
+        push_result = MagicMock(returncode=1, stdout="", stderr="remote exists")
+        mock_run.side_effect = [head_result, create_result, push_result]
+        mock_get_remote_tag_target.return_value = "head123"
+
+        result = ensure_release_tag("1.2.3")
+
+        assert result is True
+
+    @patch("execute_release.log_error")
+    @patch("execute_release.get_remote_tag_target")
+    @patch("execute_release.run_command")
+    def test_ensure_release_tag_remote_race_wrong_head(
+        self, mock_run, mock_get_remote_tag_target, mock_log_error
+    ) -> None:
+        """Test push failure aborts when remote tag points to another commit."""
+        head_result = MagicMock(returncode=0, stdout="head123\n", stderr="")
+        create_result = MagicMock(returncode=0, stdout="", stderr="")
+        push_result = MagicMock(returncode=1, stdout="", stderr="remote exists")
+        mock_run.side_effect = [head_result, create_result, push_result]
+        mock_get_remote_tag_target.return_value = "other456"
+
+        result = ensure_release_tag("1.2.3")
+
+        assert result is False
+        logged_messages = [call.args[0] for call in mock_log_error.call_args_list]
+        assert any(
+            "Remote tag 1.2.3 points to other456, expected head123" in msg
+            for msg in logged_messages
+        )
 
 
 class TestCheckTrackExists:

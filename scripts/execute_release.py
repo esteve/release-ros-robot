@@ -17,7 +17,6 @@ from typing import Optional
 
 from common import (
     get_exclude_paths_from_env,
-    get_last_tag,
     get_package_version,
     is_release_commit,
     log_error,
@@ -36,6 +35,160 @@ def get_current_branch() -> str:
         capture_output=True,
     )
     return result.stdout.strip()
+
+
+def get_local_tag_target(tag: str) -> Optional[str]:
+    """Return the commit SHA referenced by a local tag.
+
+    Args:
+        tag: Tag name to resolve.
+
+    Returns:
+        The commit SHA referenced by the tag, or None if the tag could not be
+        resolved.
+    """
+    try:
+        result = run_command(
+            ["git", "rev-list", "-n", "1", f"refs/tags/{tag}"],
+            capture_output=True,
+            check=False,
+        )
+    except OSError:
+        return None
+
+    target = result.stdout.strip()
+    if result.returncode == 0 and target:
+        return target
+    return None
+
+
+def parse_remote_tag_target(output: str, tag: str) -> Optional[str]:
+    """Return the commit SHA referenced by a remote tag listing.
+
+    Args:
+        output: Output from ``git ls-remote --tags``.
+        tag: Tag name to resolve.
+
+    Returns:
+        The peeled commit SHA for the tag, or None if the tag is absent.
+    """
+    ref = f"refs/tags/{tag}"
+    peeled_ref = f"{ref}^{{}}"
+    tag_target: Optional[str] = None
+
+    for line in output.splitlines():
+        parts = line.split()
+        if len(parts) != 2:
+            continue
+
+        sha, remote_ref = parts
+        if remote_ref == peeled_ref:
+            return sha
+        if remote_ref == ref:
+            tag_target = sha
+
+    return tag_target
+
+
+def get_remote_tag_target(tag: str) -> Optional[str]:
+    """Return the commit SHA referenced by a remote tag.
+
+    Args:
+        tag: Tag name to resolve on ``origin``.
+
+    Returns:
+        The peeled commit SHA for the remote tag, or None if it could not be
+        resolved.
+    """
+    try:
+        result = run_command(
+            [
+                "git",
+                "ls-remote",
+                "--tags",
+                "origin",
+                f"refs/tags/{tag}",
+                f"refs/tags/{tag}^{{}}",
+            ],
+            capture_output=True,
+            check=False,
+        )
+    except OSError:
+        return None
+
+    if result.returncode != 0:
+        return None
+    return parse_remote_tag_target(result.stdout, tag)
+
+
+def ensure_release_tag(tag: str) -> bool:
+    """Create and push the release tag, tolerating same-HEAD races.
+
+    Args:
+        tag: Release tag name to create and push.
+
+    Returns:
+        True if the tag exists remotely and points at ``HEAD``, False otherwise.
+    """
+    head_result = run_command(
+        ["git", "rev-parse", "HEAD"], capture_output=True, check=False
+    )
+    head_commit = head_result.stdout.strip()
+    if head_result.returncode != 0 or not head_commit:
+        log_error("Failed to determine HEAD commit for tag verification")
+        if head_result.stderr:
+            log_error(f"git rev-parse stderr:\n{head_result.stderr}")
+        return False
+
+    log_info(f"Creating git tag {tag}")
+    create_result = run_command(
+        ["git", "tag", "-a", tag, "-m", f"Release {tag}"],
+        capture_output=True,
+        check=False,
+    )
+    if create_result.returncode != 0:
+        local_target = get_local_tag_target(tag)
+        if local_target == head_commit:
+            log_info(f"Local tag {tag} already points to {head_commit}, continuing")
+        else:
+            log_error(f"Failed to create tag {tag}")
+            if create_result.stdout:
+                log_error(f"git tag stdout:\n{create_result.stdout}")
+            if create_result.stderr:
+                log_error(f"git tag stderr:\n{create_result.stderr}")
+            if local_target is None:
+                log_error(f"Could not resolve local tag {tag} after creation failure")
+            else:
+                log_error(
+                    f"Local tag {tag} points to {local_target}, expected {head_commit}"
+                )
+            return False
+
+    push_result = run_command(
+        ["git", "push", "origin", tag],
+        capture_output=True,
+        check=False,
+    )
+    if push_result.returncode != 0:
+        remote_target = get_remote_tag_target(tag)
+        if remote_target == head_commit:
+            log_info(f"Remote tag {tag} already points to {head_commit}, continuing")
+            return True
+
+        log_error(f"Failed to push tag {tag}")
+        if push_result.stdout:
+            log_error(f"git push stdout:\n{push_result.stdout}")
+        if push_result.stderr:
+            log_error(f"git push stderr:\n{push_result.stderr}")
+        if remote_target is None:
+            log_error(f"Could not resolve remote tag {tag} after push failure")
+        else:
+            log_error(
+                f"Remote tag {tag} points to {remote_target}, expected {head_commit}"
+            )
+        return False
+
+    return True
 
 
 def run_bloom_release(
@@ -245,16 +398,14 @@ def main() -> None:
     version = get_package_version(exclude_paths)
     log_info(f"Releasing version: {version}")
 
-    # Idempotent tag creation: the tag may already exist when multiple release
-    # steps run for different tracks on the same release commit.  Only create
-    # and push the tag if it does not yet exist.
-    existing_tag = get_last_tag()
-    if existing_tag == version:
-        log_info(f"Tag {version} already exists, skipping tag creation")
-    else:
-        log_info(f"Creating git tag {version}")
-        run_command(["git", "tag", "-a", version, "-m", f"Release {version}"])
-        run_command(["git", "push", "origin", version])
+    # Optimistic tag creation: in a parallel matrix another job may create the
+    # same annotated tag first. Treat that as success only when the tag resolves
+    # to this job's HEAD commit.
+    if not ensure_release_tag(version):
+        set_output("released", "false")
+        set_output("version", version)
+        set_output("rosdistro", args.rosdistro)
+        sys.exit(1)
 
     # Check if this is a new track
     track_exists = check_track_exists(
