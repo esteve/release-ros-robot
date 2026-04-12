@@ -23,7 +23,7 @@ action = [
     "rosinstall-generator",
     # bloom 0.13 still imports pkg_resources; remove this pin once bloom > 0.13
     # is released without that dependency.
-    "setuptools<82",
+    "setuptools<81",
     "vcs2l",
 ]
 
