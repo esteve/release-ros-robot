@@ -16,6 +16,7 @@ from execute_release import (
     get_current_branch,
     get_local_tag_target,
     get_remote_tag_target,
+    is_release_repo_push_conflict,
     parse_remote_tag_target,
     parse_track_list,
     run_bloom_release,
@@ -75,6 +76,28 @@ class TestRemoteTagParsing:
         result = parse_remote_tag_target(output, "1.2.3")
 
         assert result == "3333333333333333333333333333333333333333"
+
+
+class TestReleaseRepoPushConflict:
+    """Tests for release-repository push conflict detection."""
+
+    def test_detect_release_repo_push_conflict(self) -> None:
+        """Test detecting bloom's fetch-first push-race failure output."""
+        output = (
+            "error: failed to push some refs to 'https://github.com/example/repo.git'\n"
+            "! [rejected] master -> master (fetch first)\n"
+            "Pushing changes failed, would you like to add '--force' to 'git push --all'?\n"
+        )
+
+        result = is_release_repo_push_conflict(output)
+
+        assert result is True
+
+    def test_ignore_non_conflict_failures(self) -> None:
+        """Test unrelated bloom failures do not look like push races."""
+        result = is_release_repo_push_conflict("permission denied")
+
+        assert result is False
 
 
 class TestTagHelpers:
@@ -422,6 +445,63 @@ class TestRunBloomRelease:
         assert any("bloom-release failed:" in msg for msg in logged_messages)
         assert any("bloom stdout details" in msg for msg in logged_messages)
         assert any("bloom stderr details" in msg for msg in logged_messages)
+
+    @patch("execute_release.time.sleep")
+    @patch("execute_release.run_command")
+    def test_run_bloom_release_retries_release_repo_push_conflict(
+        self, mock_run, mock_sleep
+    ) -> None:
+        """Test bloom-release retries when the release repository push races."""
+        conflict_error = subprocess.CalledProcessError(
+            1,
+            ["bloom-release", "--rosdistro", "rolling", "test_package"],
+            output=(
+                "error: failed to push some refs to 'https://github.com/test/repo.git'\n"
+                "! [rejected] master -> master (fetch first)\n"
+                "Pushing changes failed, would you like to add '--force' to 'git push --all'?\n"
+            ),
+            stderr="",
+        )
+        success_result = MagicMock()
+        success_result.returncode = 0
+        success_result.stdout = "https://github.com/ros/rosdistro/pull/123\n"
+        success_result.stderr = ""
+        mock_run.side_effect = [conflict_error, success_result]
+
+        result = run_bloom_release(
+            repo_name="test_package",
+            rosdistro="rolling",
+            track="rolling",
+            release_repo="https://github.com/ros2-gbp/test_package-release.git",
+        )
+
+        assert result == "https://github.com/ros/rosdistro/pull/123"
+        assert mock_run.call_count == 2
+        mock_sleep.assert_called_once_with(1)
+
+    @patch("execute_release.time.sleep")
+    @patch("execute_release.run_command")
+    def test_run_bloom_release_does_not_retry_unrelated_failure(
+        self, mock_run, mock_sleep
+    ) -> None:
+        """Test bloom-release does not retry unrelated command failures."""
+        mock_run.side_effect = subprocess.CalledProcessError(
+            1,
+            ["bloom-release", "--rosdistro", "rolling", "test_package"],
+            output="bloom stdout details",
+            stderr="bloom stderr details",
+        )
+
+        result = run_bloom_release(
+            repo_name="test_package",
+            rosdistro="rolling",
+            track="rolling",
+            release_repo="https://github.com/ros2-gbp/test_package-release.git",
+        )
+
+        assert result is None
+        assert mock_run.call_count == 1
+        mock_sleep.assert_not_called()
 
 
 class TestIntegration:
