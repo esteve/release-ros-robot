@@ -13,6 +13,7 @@ and release-plz for ROS packages:
 import argparse
 import re
 import sys
+import xml.etree.ElementTree as ET
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Optional
@@ -309,7 +310,19 @@ def calculate_next_version(current_version: str, bump_type: str) -> str:
 
 
 def update_package_xml_version(version: str, exclude_patterns: list[str]) -> None:
-    """Update version in all package.xml files."""
+    """Update version in all package.xml files using XML parsing.
+
+    Reads the current version from each package.xml via
+    xml.etree.ElementTree, then replaces the exact ``<version>OLD</version>``
+    token in the raw file text.  This preserves the original file formatting,
+    encoding declaration, and processing instructions while avoiding brittle
+    regex patterns.
+
+    Args:
+        version: New version string to set in every discovered package.xml.
+        exclude_patterns: Glob patterns forwarded to discover_package_xmls to
+            skip test fixtures and vendored packages.
+    """
     package_xmls = discover_package_xmls(exclude_patterns)
 
     for package_xml in package_xmls:
@@ -317,10 +330,18 @@ def update_package_xml_version(version: str, exclude_patterns: list[str]) -> Non
         with open(package_xml) as f:
             content = f.read()
 
-        updated_content = re.sub(
-            r"<version>[^<]+</version>",
+        tree = ET.parse(package_xml)
+        root = tree.getroot()
+        version_element = root.find("version")
+        if version_element is None or version_element.text is None:
+            log_error(f"No <version> element found in {package_xml}")
+            sys.exit(1)
+
+        old_version = version_element.text.strip()
+        updated_content = content.replace(
+            f"<version>{old_version}</version>",
             f"<version>{version}</version>",
-            content,
+            1,
         )
 
         with open(package_xml, "w") as f:

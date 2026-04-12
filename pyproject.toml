@@ -64,12 +64,20 @@ git = ">=2.53.0,<3"
 gh = ">=2.88.1,<3"
 
 [tool.pixi.environments]
+# default: everything needed for local development (dev tools + tests + action deps)
 default = { features = ["test", "dev", "action"] }
+# dev: dev tools and tests only, without action runtime deps (bloom/rosdep)
+dev = { features = ["test", "dev"] }
+# action: minimal runtime environment for the GitHub Action (bloom + rosdep only)
+action = { features = ["action"] }
 
 [tool.pixi.tasks]
+# Development and test tasks (available in default and dev environments)
 test = "pytest --no-cov -q"
 format-check = "black --check scripts/ tests/"
 lint = "ruff check scripts/ tests/"
 typecheck = "mypy scripts/common.py scripts/execute_release.py scripts/prepare_release.py --ignore-missing-imports"
-rosdep-init = "sudo \"$CONDA_PREFIX/bin/rosdep\" init || true"
-rosdep-update = "rosdep update"
+
+# Action runtime tasks (available in default and action environments)
+rosdep-init = { cmd = "sudo \"$CONDA_PREFIX/bin/rosdep\" init || true", default-environment = "action" }
+rosdep-update = { cmd = "rosdep update", default-environment = "action" }

@@ -4,11 +4,9 @@ on:
   push:
     branches:
       - main
-      - master
   pull_request:
     branches:
       - main
-      - master
 
 jobs:
   test:
@@ -22,10 +20,10 @@ jobs:
         uses: jdx/mise-action@v4
 
       - name: Install dependencies
-        run: pixi install --locked
+        run: pixi install --locked --environment dev
 
       - name: Run tests with coverage
-        run: pixi run --locked pytest --cov=scripts --cov-report=xml --cov-report=term-missing
+        run: pixi run --locked --environment dev pytest --cov=scripts --cov-report=xml --cov-report=term-missing
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
@@ -44,16 +42,16 @@ jobs:
         uses: jdx/mise-action@v4
 
       - name: Install dependencies
-        run: pixi install --locked
+        run: pixi install --locked --environment dev
 
       - name: Check formatting with Black
-        run: pixi run --locked format-check
+        run: pixi run --locked --environment dev format-check
 
       - name: Lint with Ruff
-        run: pixi run --locked lint
+        run: pixi run --locked --environment dev lint
 
       - name: Type check with mypy
-        run: pixi run --locked typecheck
+        run: pixi run --locked --environment dev typecheck
 
   validate:
     name: Validate Files
@@ -66,16 +64,17 @@ jobs:
         uses: jdx/mise-action@v4
 
       - name: Install dependencies
-        run: pixi install --locked
+        run: pixi install --locked --environment dev
 
       - name: Validate YAML files
         run: |
-          pixi run --locked python -c "import yaml; yaml.safe_load(open('action.yml'))"
-          pixi run --locked python -c "import yaml; yaml.safe_load(open('example-release-workflow.yaml'))"
+          pixi run --locked --environment dev python -c "import yaml; yaml.safe_load(open('action.yml'))"
+          pixi run --locked --environment dev python -c "import yaml; yaml.safe_load(open('example-release-workflow.yaml'))"
 
       - name: Compile Python files
         run: |
-          pixi run --locked python -m py_compile \
+          pixi run --locked --environment dev python -m py_compile \
             scripts/common.py \
             scripts/execute_release.py \
             scripts/prepare_release.py
+

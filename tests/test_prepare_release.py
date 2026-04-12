@@ -3,6 +3,7 @@
 import os
 import subprocess
 import sys
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -1073,3 +1074,157 @@ class TestPrepareConfig:
         assert mock_calculate_next_version.call_args[0][1] == "patch"
         assert mock_create_or_update_release_pr.call_args[0][0] == "rolling"
         mock_set_output.assert_any_call("version", "1.2.4")
+
+
+class TestUpdatePackageXmlVersionXmlBased:
+    """Tests verifying that update_package_xml_version uses XML parsing.
+
+    These tests assert the *observable* outcomes expected of the ET-based
+    implementation:
+
+    * The <version> element is updated to the new value (readable via ET).
+    * Non-version content, XML declaration, processing instructions,
+      element attributes, whitespace, and all other element text, is
+      preserved byte-for-byte.
+    * Multi-package repositories have every discovered package.xml updated.
+    * Packages matched by exclude_patterns are skipped.
+    * Missing <version> element causes sys.exit(1).
+    """
+
+    def test_version_updated_via_et_parse(
+        self, temp_dir: Path, package_xml_content: str
+    ) -> None:
+        """ET.parse on the rewritten file returns the new version."""
+        os.chdir(temp_dir)
+        (temp_dir / "package.xml").write_text(package_xml_content)
+
+        update_package_xml_version("9.8.7", [])
+
+        root = ET.parse(temp_dir / "package.xml").getroot()
+        assert root.findtext("version") == "9.8.7"
+
+    def test_xml_declaration_preserved(
+        self, temp_dir: Path, package_xml_content: str
+    ) -> None:
+        """The XML declaration line is untouched after a version update."""
+        os.chdir(temp_dir)
+        (temp_dir / "package.xml").write_text(package_xml_content)
+
+        update_package_xml_version("2.0.0", [])
+
+        updated = (temp_dir / "package.xml").read_text()
+        assert updated.startswith('<?xml version="1.0"?>')
+
+    def test_processing_instruction_preserved(
+        self, temp_dir: Path, package_xml_content: str
+    ) -> None:
+        """The <?xml-model …?> processing instruction is preserved."""
+        os.chdir(temp_dir)
+        (temp_dir / "package.xml").write_text(package_xml_content)
+
+        update_package_xml_version("2.0.0", [])
+
+        updated = (temp_dir / "package.xml").read_text()
+        assert "<?xml-model" in updated
+
+    def test_non_version_elements_preserved(
+        self, temp_dir: Path, package_xml_content: str
+    ) -> None:
+        """Name, description, maintainer and other elements are not changed."""
+        os.chdir(temp_dir)
+        (temp_dir / "package.xml").write_text(package_xml_content)
+
+        update_package_xml_version("2.0.0", [])
+
+        root = ET.parse(temp_dir / "package.xml").getroot()
+        assert root.findtext("name") == "test_package"
+        assert root.findtext("description") == "Test package for release-ros-robot"
+        assert root.findtext("license") == "Apache-2.0"
+
+    def test_old_version_absent_after_update(
+        self, temp_dir: Path, package_xml_content: str
+    ) -> None:
+        """The old version string no longer appears in the file after update."""
+        os.chdir(temp_dir)
+        (temp_dir / "package.xml").write_text(package_xml_content)
+
+        update_package_xml_version("2.0.0", [])
+
+        updated = (temp_dir / "package.xml").read_text()
+        assert "<version>1.2.3</version>" not in updated
+        assert "<version>2.0.0</version>" in updated
+
+    def test_multi_package_all_updated(
+        self, temp_dir: Path, package_xml_content: str
+    ) -> None:
+        """All package.xml files in a multi-package repo are updated."""
+        os.chdir(temp_dir)
+
+        pkg_a = temp_dir / "pkg_a"
+        pkg_b = temp_dir / "pkg_b"
+        pkg_a.mkdir()
+        pkg_b.mkdir()
+        (pkg_a / "package.xml").write_text(package_xml_content)
+        (pkg_b / "package.xml").write_text(package_xml_content)
+
+        update_package_xml_version("5.0.0", [])
+
+        for pkg_dir in (pkg_a, pkg_b):
+            root = ET.parse(pkg_dir / "package.xml").getroot()
+            assert root.findtext("version") == "5.0.0"
+
+    def test_excluded_package_not_updated(
+        self, temp_dir: Path, package_xml_content: str
+    ) -> None:
+        """A package.xml matched by exclude_patterns is skipped."""
+        os.chdir(temp_dir)
+
+        real_pkg = temp_dir / "real_pkg"
+        fixture = temp_dir / "test" / "fixture_pkg"
+        real_pkg.mkdir()
+        fixture.mkdir(parents=True)
+        (real_pkg / "package.xml").write_text(package_xml_content)
+        (fixture / "package.xml").write_text(package_xml_content)
+
+        update_package_xml_version("4.0.0", ["test/**"])
+
+        real_root = ET.parse(real_pkg / "package.xml").getroot()
+        assert real_root.findtext("version") == "4.0.0"
+
+        fixture_root = ET.parse(fixture / "package.xml").getroot()
+        assert fixture_root.findtext("version") == "1.2.3"
+
+    def test_missing_version_element_exits(self, temp_dir: Path) -> None:
+        """sys.exit(1) is raised when <version> is absent from package.xml."""
+        os.chdir(temp_dir)
+        (temp_dir / "package.xml").write_text(
+            '<?xml version="1.0"?>\n<package format="3">\n  <name>bad_pkg</name>\n</package>\n'
+        )
+
+        with pytest.raises(SystemExit) as exc_info:
+            update_package_xml_version("1.0.0", [])
+        assert exc_info.value.code == 1
+
+    def test_release_version_semantics_patch_bump(
+        self, temp_dir: Path, package_xml_content: str
+    ) -> None:
+        """Version semantics: patch bump 1.2.3 → 1.2.4 is written correctly."""
+        os.chdir(temp_dir)
+        (temp_dir / "package.xml").write_text(package_xml_content)
+
+        update_package_xml_version("1.2.4", [])
+
+        root = ET.parse(temp_dir / "package.xml").getroot()
+        assert root.findtext("version") == "1.2.4"
+
+    def test_release_version_semantics_major_bump(
+        self, temp_dir: Path, package_xml_content: str
+    ) -> None:
+        """Version semantics: major bump 1.2.3 → 2.0.0 is written correctly."""
+        os.chdir(temp_dir)
+        (temp_dir / "package.xml").write_text(package_xml_content)
+
+        update_package_xml_version("2.0.0", [])
+
+        root = ET.parse(temp_dir / "package.xml").getroot()
+        assert root.findtext("version") == "2.0.0"

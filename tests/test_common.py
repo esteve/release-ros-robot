@@ -13,9 +13,13 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 from common import (
     DEFAULT_CONFIG_FILES,
     discover_package_xmls,
-    load_config_file,
+    get_config_string,
+    get_config_string_list,
+    get_config_value,
     get_last_tag,
     get_package_version,
+    load_config_file,
+    resolve_exclude_paths,
 )
 
 
@@ -283,3 +287,165 @@ class TestConfigLoading:
 
         with pytest.raises(SystemExit):
             load_config_file(None)
+
+
+class TestGetConfigValue:
+    """Tests for get_config_value nested key lookup."""
+
+    def test_returns_value_for_existing_single_key(self) -> None:
+        """Test a top-level key is returned correctly."""
+        config = {"repository": "my_pkg"}
+
+        result = get_config_value(config, "repository")
+
+        assert result == "my_pkg"
+
+    def test_returns_value_for_existing_nested_key(self) -> None:
+        """Test a nested key is resolved through multiple levels."""
+        config = {"release": {"targets": {"main": []}}}
+
+        result = get_config_value(config, "release", "targets")
+
+        assert result == {"main": []}
+
+    def test_returns_none_for_missing_key(self) -> None:
+        """Test a missing top-level key returns None."""
+        result = get_config_value({}, "missing")
+
+        assert result is None
+
+    def test_returns_none_for_missing_nested_key(self) -> None:
+        """Test a missing nested key returns None without raising."""
+        config = {"release": {}}
+
+        result = get_config_value(config, "release", "targets")
+
+        assert result is None
+
+    def test_returns_none_when_intermediate_key_is_not_dict(self) -> None:
+        """Test that a non-dict intermediate value short-circuits to None."""
+        config = {"release": "not-a-dict"}
+
+        result = get_config_value(config, "release", "targets")
+
+        assert result is None
+
+
+class TestGetConfigString:
+    """Tests for get_config_string single-value extraction."""
+
+    def test_returns_string_value(self) -> None:
+        """Test a valid string config value is returned stripped."""
+        config = {"repository": "  my_pkg  "}
+
+        result = get_config_string(config, "repository")
+
+        assert result == "my_pkg"
+
+    def test_returns_none_for_missing_key(self) -> None:
+        """Test a missing key returns None without exiting."""
+        result = get_config_string({}, "repository")
+
+        assert result is None
+
+    def test_exits_on_non_string_value(self) -> None:
+        """Test a non-string value causes SystemExit."""
+        config = {"repository": 42}
+
+        with pytest.raises(SystemExit):
+            get_config_string(config, "repository")
+
+    def test_exits_on_empty_string_value(self) -> None:
+        """Test a blank string value causes SystemExit."""
+        config = {"repository": "   "}
+
+        with pytest.raises(SystemExit):
+            get_config_string(config, "repository")
+
+    def test_uses_field_name_in_error_message(self, capsys) -> None:
+        """Test the field_name kwarg appears in the error output."""
+        config = {"repository": 123}
+
+        with pytest.raises(SystemExit):
+            get_config_string(config, "repository", field_name="repository")
+
+        captured = capsys.readouterr()
+        assert "repository" in captured.out
+
+
+class TestGetConfigStringList:
+    """Tests for get_config_string_list list extraction."""
+
+    def test_returns_list_of_strings(self) -> None:
+        """Test a valid list of strings is returned stripped."""
+        config = {"exclude_paths": ["test/**", "  vendor/**  "]}
+
+        result = get_config_string_list(config, "exclude_paths")
+
+        assert result == ["test/**", "vendor/**"]
+
+    def test_returns_empty_list_for_missing_key(self) -> None:
+        """Test a missing key returns an empty list without exiting."""
+        result = get_config_string_list({}, "exclude_paths")
+
+        assert result == []
+
+    def test_filters_blank_entries(self) -> None:
+        """Test that blank strings inside the list are filtered out."""
+        config = {"exclude_paths": ["test/**", "  ", "vendor/**"]}
+
+        result = get_config_string_list(config, "exclude_paths")
+
+        assert result == ["test/**", "vendor/**"]
+
+    def test_exits_on_non_list_value(self) -> None:
+        """Test a non-list value causes SystemExit."""
+        config = {"exclude_paths": "test/**"}
+
+        with pytest.raises(SystemExit):
+            get_config_string_list(config, "exclude_paths")
+
+    def test_exits_on_list_with_non_string_items(self) -> None:
+        """Test a list containing non-string items causes SystemExit."""
+        config = {"exclude_paths": ["test/**", 42]}
+
+        with pytest.raises(SystemExit):
+            get_config_string_list(config, "exclude_paths")
+
+
+class TestResolveExcludePaths:
+    """Tests for resolve_exclude_paths environment/config precedence."""
+
+    def test_returns_env_paths_when_set(self, monkeypatch) -> None:
+        """Test BLOOM_EXCLUDE_PATHS env var takes precedence over config."""
+        monkeypatch.setenv("BLOOM_EXCLUDE_PATHS", "test/**\nvendor/**")
+        config = {"exclude_paths": ["config_path/**"]}
+
+        result = resolve_exclude_paths(config)
+
+        assert result == ["test/**", "vendor/**"]
+
+    def test_returns_config_paths_when_env_absent(self, monkeypatch) -> None:
+        """Test config file exclude_paths is used when env var is absent."""
+        monkeypatch.delenv("BLOOM_EXCLUDE_PATHS", raising=False)
+        config = {"exclude_paths": ["config_path/**"]}
+
+        result = resolve_exclude_paths(config)
+
+        assert result == ["config_path/**"]
+
+    def test_returns_empty_list_when_both_absent(self, monkeypatch) -> None:
+        """Test an empty list is returned when neither env nor config has paths."""
+        monkeypatch.delenv("BLOOM_EXCLUDE_PATHS", raising=False)
+
+        result = resolve_exclude_paths({})
+
+        assert result == []
+
+    def test_env_blank_lines_are_ignored(self, monkeypatch) -> None:
+        """Test blank lines in BLOOM_EXCLUDE_PATHS are filtered out."""
+        monkeypatch.setenv("BLOOM_EXCLUDE_PATHS", "test/**\n\n  \nvendor/**")
+
+        result = resolve_exclude_paths({})
+
+        assert result == ["test/**", "vendor/**"]

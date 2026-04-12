@@ -75,6 +75,7 @@ jobs:
         uses: esteve/release-ros-robot@v1
         with:
           mode: prepare
+          base-branch: ${{ github.ref_name }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

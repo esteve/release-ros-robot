@@ -24,66 +24,10 @@ default, and direct action inputs override the config file when needed.
 
 ### 1. Create the GitHub workflow
 
-Create `.github/workflows/bloom-release.yaml`:
-
-```yaml
-name: Release
-
-on:
-  push:
-    branches:
-      - main
-      - jazzy
-      - humble
-
-jobs:
-  # Runs on every push. Self-skips on non-release commits.
-  release:
-    name: Release
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    env:
-      BLOOM_OAUTH_TOKEN: ${{ secrets.BLOOM_OAUTH_TOKEN }}
-      BLOOM_GITHUB_USER: ${{ secrets.BLOOM_GITHUB_USER }}
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Run bloom-release targets
-        uses: esteve/release-ros-robot@v1
-        with:
-          mode: release
-
-  # Runs on every push. Self-skips when the push came from merging a release PR.
-  # The concurrency block ensures only one instance runs at a time per branch.
-  release-pr:
-    name: Release PR
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      pull-requests: write
-    concurrency:
-      group: release-pr-${{ github.ref }}
-      cancel-in-progress: false
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Update release PR
-        uses: esteve/release-ros-robot@v0
-        with:
-          mode: prepare
-          base-branch: ${{ github.ref_name }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-```
+Copy [`example-release-workflow.yaml`](example-release-workflow.yaml) from this
+repository to `.github/workflows/bloom-release.yaml` in your ROS package repo
+and customize the `branches` list. The file is the canonical workflow reference
+and includes inline comments explaining each section.
 
 Keep release runs sequential when multiple tracks share the same release
 repository. The configured `targets` do that inside one action invocation. If you
@@ -281,32 +225,6 @@ this exclusion, fixture `package.xml` files would be:
 | `pr-url` | URL of the release PR or rosdistro PR. In release mode this is set when exactly one target matched. |
 | `results-json` | JSON array of per-target release results in release mode |
 
-
-## Conventional Commits
-
-The action supports automatic version bump detection using the
-[Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/) specification:
-
-```
-<type>[optional scope][!]: <description>
-```
-
-Version bump rules:
-- `BREAKING CHANGE` in message or `!` after type → `major`
-- `feat` type → `minor`
-- `fix`, `perf`, `refactor`, `docs`, `style`, `test`, `chore`, `build`, `ci` → `patch`
-
-Examples:
-```
-feat: add new ROS distro support          → minor
-feat!: redesign configuration format      → major
-fix: correct version parsing              → patch
-docs: update README                       → patch
-refactor(core): simplify release logic    → patch
-```
-
-Set `version-bump: auto` (default) to enable automatic detection.
-
 ## Prerequisites
 
 ### Repository Workflow Permissions
@@ -367,6 +285,11 @@ approve pull requests" is enabled in repository settings.
 
 This project uses [mise](https://mise.jdx.dev) to manage tools and [pixi](https://pixi.sh) to manage the Python environment. Both are declared in `mise.toml` and `pyproject.toml` respectively.
 
+Three Pixi environments are available:
+- `default`, all deps including bloom and rosdep (used for full local dev)
+- `dev`, dev tools and tests only, without action runtime deps; used in CI
+- `action`, minimal runtime environment for the GitHub Action (bloom + rosdep only)
+
 ```bash
 # Clone the repository
 git clone https://github.com/esteve/release-ros-robot.git
@@ -375,7 +298,7 @@ cd release-ros-robot
 # Install mise (if not already installed)
 curl https://mise.run | sh
 
-# Install pixi and all project dependencies
+# Install pixi and all project dependencies (default environment)
 mise install
 pixi install
 

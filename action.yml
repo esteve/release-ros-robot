@@ -97,12 +97,12 @@ runs:
     - name: Initialize rosdep
       if: inputs.mode == 'release'
       shell: bash
-      run: pixi run --manifest-path "${{ github.action_path }}" --frozen rosdep-init
+      run: pixi run --manifest-path "${{ github.action_path }}" --frozen --environment action rosdep-init
 
     - name: Update rosdep
       if: inputs.mode == 'release'
       shell: bash
-      run: pixi run --manifest-path "${{ github.action_path }}" --frozen rosdep-update
+      run: pixi run --manifest-path "${{ github.action_path }}" --frozen --environment action rosdep-update
 
     - name: Configure Git
       shell: bash
@@ -123,7 +123,7 @@ runs:
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           echo "https://x-access-token:${GITHUB_TOKEN}@github.com" > ~/.git-credentials
         else
-          # release mode: authenticate with BLOOM_OAUTH_TOKEN (env-first, input fallback).
+          # release mode: resolve credentials once; write to GITHUB_ENV for downstream steps.
           _TOKEN="${BLOOM_OAUTH_TOKEN:-${INPUT_OAUTH_TOKEN:-}}"
           _USER="${BLOOM_GITHUB_USER:-${INPUT_GITHUB_USER:-}}"
           if [ -z "${_TOKEN}" ]; then
@@ -148,59 +148,43 @@ runs:
 
           git config --global user.name "${_USER}"
           git config --global user.email "${_ID}+${_USER}@users.noreply.github.com"
+
+          # Normalize resolved credentials for downstream release steps.
+          echo "BLOOM_OAUTH_TOKEN=${_TOKEN}" >> "${GITHUB_ENV}"
+          echo "BLOOM_GITHUB_USER=${_USER}" >> "${GITHUB_ENV}"
         fi
 
     - name: Configure Bloom
       if: inputs.mode == 'release'
       shell: bash
-      env:
-        INPUT_OAUTH_TOKEN: ${{ inputs.oauth-token }}
-        INPUT_GITHUB_USER: ${{ inputs.github-user }}
       run: |
-        _TOKEN="${BLOOM_OAUTH_TOKEN:-${INPUT_OAUTH_TOKEN:-}}"
-        _USER="${BLOOM_GITHUB_USER:-${INPUT_GITHUB_USER:-}}"
-        if [ -z "${_USER}" ]; then
-          echo "::error::release mode requires BLOOM_GITHUB_USER env var or github-user input."
-          exit 1
-        fi
         mkdir -p ~/.config
         cat > ~/.config/bloom <<EOF
         {
-          "github_user": "${_USER}",
-          "oauth_token": "${_TOKEN}"
+          "github_user": "${BLOOM_GITHUB_USER}",
+          "oauth_token": "${BLOOM_OAUTH_TOKEN}"
         }
         EOF
-
-    - name: Validate release-mode inputs
-      if: inputs.mode == 'release'
-      shell: bash
-      run: |
-        # Validation happens inside the Python entry points after config + input merge.
-        true
 
     - name: Ensure rosdistro fork exists
       if: inputs.mode == 'release'
       shell: bash
-      env:
-        INPUT_OAUTH_TOKEN: ${{ inputs.oauth-token }}
-        INPUT_GITHUB_USER: ${{ inputs.github-user }}
       run: |
-        export GH_TOKEN="${BLOOM_OAUTH_TOKEN:-${INPUT_OAUTH_TOKEN:-}}"
-        _USER="${BLOOM_GITHUB_USER:-${INPUT_GITHUB_USER:-}}"
+        export GH_TOKEN="${BLOOM_OAUTH_TOKEN}"
 
-        if gh api "repos/${_USER}/rosdistro" --silent >/dev/null 2>&1; then
-          echo "Found existing rosdistro fork at ${_USER}/rosdistro"
+        if gh api "repos/${BLOOM_GITHUB_USER}/rosdistro" --silent >/dev/null 2>&1; then
+          echo "Found existing rosdistro fork at ${BLOOM_GITHUB_USER}/rosdistro"
           exit 0
         fi
 
-        echo "rosdistro fork not found for ${_USER}; creating it now"
+        echo "rosdistro fork not found for ${BLOOM_GITHUB_USER}; creating it now"
         gh repo fork ros/rosdistro --remote=false >/dev/null 2>&1 || true
 
         _attempt=1
         _max_attempts=12
         while [ "${_attempt}" -le "${_max_attempts}" ]; do
-          if gh api "repos/${_USER}/rosdistro" --silent >/dev/null 2>&1; then
-            echo "rosdistro fork is ready at ${_USER}/rosdistro"
+          if gh api "repos/${BLOOM_GITHUB_USER}/rosdistro" --silent >/dev/null 2>&1; then
+            echo "rosdistro fork is ready at ${BLOOM_GITHUB_USER}/rosdistro"
             exit 0
           fi
 
@@ -209,7 +193,7 @@ runs:
           _attempt=$((_attempt + 1))
         done
 
-        echo "::error::Could not find or create ${_USER}/rosdistro. Ensure BLOOM_GITHUB_USER owns the PAT and can fork ros/rosdistro."
+        echo "::error::Could not find or create ${BLOOM_GITHUB_USER}/rosdistro. Ensure BLOOM_GITHUB_USER owns the PAT and can fork ros/rosdistro."
         exit 1
 
     - name: Prepare Release PR
@@ -235,11 +219,10 @@ runs:
       id: bloom-release
       shell: bash
       env:
-        INPUT_OAUTH_TOKEN: ${{ inputs.oauth-token }}
         BLOOM_EXCLUDE_PATHS: ${{ inputs.exclude-paths }}
         INPUT_TARGETS: ${{ inputs.targets }}
       run: |
-        export GH_TOKEN="${BLOOM_OAUTH_TOKEN:-${INPUT_OAUTH_TOKEN:-}}"
+        export GH_TOKEN="${BLOOM_OAUTH_TOKEN}"
         ARGS=(
           --config-file "${{ inputs.config-file }}"
           --repository "${{ inputs.repository }}"
@@ -251,4 +234,5 @@ runs:
           ARGS+=(--dry-run)
         fi
         pixi run --manifest-path "${{ github.action_path }}" \
+          --environment action \
           python "${{ github.action_path }}/scripts/execute_release.py" "${ARGS[@]}"
