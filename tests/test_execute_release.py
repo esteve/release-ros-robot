@@ -13,6 +13,7 @@ from common import get_last_tag, get_package_version, is_release_commit
 from execute_release import (
     check_track_exists,
     get_current_branch,
+    parse_track_list,
     run_bloom_release,
 )
 
@@ -31,40 +32,96 @@ class TestGetCurrentBranch:
         assert branch == "test-branch"
 
 
+class TestParseTrackList:
+    """Tests for parse_track_list function."""
+
+    def test_parse_track_list_from_available_tracks_output(self) -> None:
+        """Test parsing bloom's Available tracks output."""
+        output = "Available tracks: ['rolling', 'jazzy']\n"
+
+        result = parse_track_list(output)
+
+        assert result == {"rolling", "jazzy"}
+
+    def test_parse_track_list_returns_none_for_unparseable_output(self) -> None:
+        """Test parse_track_list returns None when output is unparseable."""
+        result = parse_track_list("tracks:\n- rolling\n")
+
+        assert result is None
+
+
 class TestCheckTrackExists:
     """Tests for check_track_exists function."""
 
     @patch("execute_release.run_command")
-    def test_track_exists(self, mock_run):
+    def test_track_exists(self, mock_run) -> None:
         """Test checking if a track exists."""
         mock_result = MagicMock()
         mock_result.returncode = 0
-        mock_result.stdout = "tracks:\n- rolling\n- jazzy\n"
+        mock_result.stdout = "Available tracks: ['rolling', 'jazzy']\n"
+        mock_result.stderr = ""
         mock_run.return_value = mock_result
 
-        result = check_track_exists("https://github.com/test/repo.git", "rolling")
+        result = check_track_exists(
+            "test_package",
+            "rolling",
+            "rolling",
+            "https://github.com/test/repo-release.git",
+        )
         assert result is True
 
     @patch("execute_release.run_command")
-    def test_track_does_not_exist(self, mock_run):
+    def test_track_does_not_exist(self, mock_run) -> None:
         """Test checking if a track doesn't exist."""
         mock_result = MagicMock()
         mock_result.returncode = 0
-        mock_result.stdout = "tracks:\n- jazzy\n"
+        mock_result.stdout = "Available tracks: ['jazzy']\n"
+        mock_result.stderr = ""
         mock_run.return_value = mock_result
 
-        result = check_track_exists("https://github.com/test/repo.git", "rolling")
+        result = check_track_exists(
+            "test_package",
+            "rolling",
+            "rolling",
+            "https://github.com/test/repo-release.git",
+        )
         assert result is False
 
     @patch("execute_release.run_command")
-    def test_track_check_error(self, mock_run):
-        """Test checking track when command fails."""
+    def test_track_does_not_exist_in_empty_release_repo(self, mock_run) -> None:
+        """Test missing tracks are detected for an empty release repository."""
         mock_result = MagicMock()
         mock_result.returncode = 1
+        mock_result.stdout = ""
+        mock_result.stderr = (
+            "Release repository has no tracks nor an old style bloom.conf file."
+        )
         mock_run.return_value = mock_result
 
-        result = check_track_exists("https://github.com/test/repo.git", "rolling")
+        result = check_track_exists(
+            "test_package",
+            "rolling",
+            "rolling",
+            "https://github.com/test/repo-release.git",
+        )
         assert result is False
+
+    @patch("execute_release.run_command")
+    def test_track_check_error(self, mock_run) -> None:
+        """Test checking track returns None when command output is inconclusive."""
+        mock_result = MagicMock()
+        mock_result.returncode = 1
+        mock_result.stdout = "unexpected output"
+        mock_result.stderr = ""
+        mock_run.return_value = mock_result
+
+        result = check_track_exists(
+            "test_package",
+            "rolling",
+            "rolling",
+            "https://github.com/test/repo-release.git",
+        )
+        assert result is None
 
 
 class TestRunBloomRelease:

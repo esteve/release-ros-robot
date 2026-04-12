@@ -9,9 +9,11 @@ It performs the following steps:
 """
 
 import argparse
+import ast
 import re
 import subprocess
 import sys
+from typing import Optional
 
 from common import (
     get_exclude_paths_from_env,
@@ -43,7 +45,7 @@ def run_bloom_release(
     release_repo: str,
     dry_run: bool = False,
     new_track: bool = False,
-) -> str | None:
+) -> Optional[str]:
     """
     Run bloom-release for the specified distribution.
 
@@ -94,17 +96,79 @@ def run_bloom_release(
     return None
 
 
-def check_track_exists(repo_name: str, track: str) -> bool:
-    """Check if a bloom track already exists for this repository."""
+def parse_track_list(output: str) -> Optional[set[str]]:
+    """Parse track names from bloom-release --list-tracks output.
+
+    Args:
+        output: Combined stdout and stderr from bloom-release.
+
+    Returns:
+        The set of track names bloom reported, or None if parsing failed.
+    """
+    match = re.search(
+        r"Available tracks:\s*(?:[A-Za-z_]+\()?([^\n]*\[[^\n]*\])\)?", output
+    )
+    if match is None:
+        return None
+
+    try:
+        parsed_tracks = ast.literal_eval(match.group(1))
+    except (SyntaxError, ValueError):
+        return None
+
+    if not isinstance(parsed_tracks, list):
+        return None
+
+    if any(not isinstance(track_name, str) for track_name in parsed_tracks):
+        return None
+
+    return set(parsed_tracks)
+
+
+def check_track_exists(
+    repo_name: str,
+    rosdistro: str,
+    track: str,
+    release_repo: str,
+) -> Optional[bool]:
+    """Check if a bloom track exists in the explicit release repository.
+
+    Args:
+        repo_name: Repository name as registered in rosdistro.
+        rosdistro: ROS distribution used for bloom context.
+        track: Bloom track name to check.
+        release_repo: Release repository URL bloom should inspect.
+
+    Returns:
+        True if the track exists, False if it definitely does not exist, or
+        None if the probe was inconclusive.
+    """
     try:
         result = run_command(
-            ["bloom-release", "--list-tracks", repo_name],
+            [
+                "bloom-release",
+                "--rosdistro",
+                rosdistro,
+                "--override-release-repository-url",
+                release_repo,
+                "--list-tracks",
+                repo_name,
+            ],
             capture_output=True,
             check=False,
         )
-        return track in result.stdout
     except OSError:
+        return None
+
+    output = result.stdout + result.stderr
+    tracks = parse_track_list(output)
+    if tracks is not None:
+        return track in tracks
+
+    if "Release repository has no tracks nor an old style bloom.conf file." in output:
         return False
+
+    return None
 
 
 def parse_args() -> argparse.Namespace:
@@ -186,9 +250,20 @@ def main() -> None:
         run_command(["git", "push", "origin", version])
 
     # Check if this is a new track
-    new_track = not check_track_exists(args.repository, args.track)
+    track_exists = check_track_exists(
+        repo_name=args.repository,
+        rosdistro=args.rosdistro,
+        track=args.track,
+        release_repo=args.release_repository,
+    )
+    new_track = track_exists is False
     if new_track:
         log_info(f"Track '{args.track}' does not exist, will create new track")
+    elif track_exists is None:
+        log_warning(
+            f"Could not determine whether track '{args.track}' exists; "
+            "running bloom-release without --new-track"
+        )
 
     # Run bloom-release
     if args.dry_run:
