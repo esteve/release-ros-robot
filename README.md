@@ -52,7 +52,7 @@ jobs:
 
       - name: Run bloom-release (main → rolling)
         if: github.ref_name == 'main'
-        uses: esteve/release-ros-robot@v1
+        uses: esteve/release-ros-robot@v0
         with:
           mode: release
           repository: my_ros_package
@@ -62,7 +62,7 @@ jobs:
 
       - name: Run bloom-release (jazzy)
         if: github.ref_name == 'jazzy'
-        uses: esteve/release-ros-robot@v1
+        uses: esteve/release-ros-robot@v0
         with:
           mode: release
           repository: my_ros_package
@@ -72,7 +72,7 @@ jobs:
 
       - name: Run bloom-release (humble)
         if: github.ref_name == 'humble'
-        uses: esteve/release-ros-robot@v1
+        uses: esteve/release-ros-robot@v0
         with:
           mode: release
           repository: my_ros_package
@@ -99,7 +99,7 @@ jobs:
           persist-credentials: false
 
       - name: Update release PR
-        uses: esteve/release-ros-robot@v1
+        uses: esteve/release-ros-robot@v0
         with:
           mode: prepare
           base-branch: ${{ github.ref_name }}
@@ -213,7 +213,7 @@ use the `exclude-paths` input:
 
 ```yaml
       - name: Update release PR
-        uses: esteve/release-ros-robot@v1
+        uses: esteve/release-ros-robot@v0
         with:
           mode: prepare
           base-branch: ${{ github.ref_name }}
@@ -341,8 +341,8 @@ before opening a PR to `ros/rosdistro`. Ensure:
 ### `release-pr` job fails with a permission error
 
 Check that the job has `permissions: contents: write` and
-`pull-requests: write`, and that **"Allow GitHub Actions to create and
-approve pull requests"** is enabled in repository settings.
+`pull-requests: write`, and that "Allow GitHub Actions to create and
+approve pull requests" is enabled in repository settings.
 
 ## Development
 
